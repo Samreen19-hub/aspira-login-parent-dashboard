@@ -2,7 +2,9 @@
 
 import { useState } from "react"
 import Image from "next/image"
-import { Heart, MessageCircle, Share2, Bookmark, MoreHorizontal, Globe, Smile, Camera, Send } from "lucide-react"
+import { Heart, MessageCircle, Share2, Bookmark, MoreHorizontal, Globe, Smile, Camera, Send, Copy, Users, MessageSquare } from "lucide-react"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import type { FeedPost } from "@/lib/parent-data"
@@ -21,16 +23,17 @@ export function PostCard({ post }: { post: FeedPost }) {
   const [showComments, setShowComments] = useState(false)
   const [comment, setComment] = useState("")
   const [comments, setComments] = useState(post.comments)
+  const [shareOpen, setShareOpen] = useState(false)
+  const [emojiOpen, setEmojiOpen] = useState(false)
+  const [commentImage, setCommentImage] = useState<string>()
+  const [copied, setCopied] = useState(false)
 
   const likeCount = post.likes + (liked ? 1 : 0)
 
   function addComment() {
-    if (!comment.trim()) return
-    setComments((prev) => [
-      ...prev,
-      { id: `c-${Date.now()}`, author: "Rashi Kapoor", avatar: "/avatar-rashi.png", text: comment.trim(), time: "now" },
-    ])
-    setComment("")
+    if (!comment.trim() && !commentImage) return
+    setComments((prev) => [...prev, { id: `c-${Date.now()}`, author: "Rashi Kapoor", avatar: "/avatar-rashi.png", text: `${comment.trim()}${commentImage ? " [photo attached]" : ""}`.trim(), time: "now" }])
+    setComment(""); setCommentImage(undefined)
     setShowComments(true)
   }
 
@@ -114,7 +117,7 @@ export function PostCard({ post }: { post: FeedPost }) {
         <div className="flex items-center justify-between py-1.5">
           <ActionButton icon={Heart} label="Like" active={liked} onClick={() => setLiked((v) => !v)} />
           <ActionButton icon={MessageCircle} label="Comment" onClick={() => setShowComments((v) => !v)} />
-          <ActionButton icon={Share2} label="Share" />
+          <ActionButton icon={Share2} label="Share" onClick={() => setShareOpen(true)} />
           <ActionButton
             icon={Bookmark}
             label="Save"
@@ -188,24 +191,22 @@ export function PostCard({ post }: { post: FeedPost }) {
             aria-label="Write a comment"
           />
           <div className="flex items-center gap-1 text-muted-foreground">
-            <button type="button" className="rounded-full p-1.5 hover:bg-secondary" aria-label="Add emoji">
-              <Smile className="size-4" />
-            </button>
-            <button type="button" className="rounded-full p-1.5 hover:bg-secondary" aria-label="Add photo">
-              <Camera className="size-4" />
-            </button>
+            <button type="button" onClick={() => setEmojiOpen((v) => !v)} className="rounded-full p-1.5 hover:bg-secondary" aria-label="Add emoji"><Smile className="size-4" /></button>
+            <label className="rounded-full p-1.5 hover:bg-secondary" aria-label="Add photo"><Camera className="size-4" /><input type="file" accept="image/*" className="sr-only" onChange={(e) => { const file = e.target.files?.[0]; if (file) setCommentImage(URL.createObjectURL(file)) }} /></label>
             <button
               type="button"
               onClick={addComment}
-              disabled={!comment.trim()}
+              disabled={!comment.trim() && !commentImage}
               className="rounded-full p-1.5 text-brand hover:bg-secondary disabled:opacity-40"
               aria-label="Send comment"
             >
               <Send className="size-4" />
             </button>
           </div>
+          {emojiOpen && <div className="absolute z-10 mt-12 rounded-xl border border-border bg-card p-2 shadow-lg"><div className="flex gap-1 text-lg">{["😀", "👏", "🎉", "❤️", "😊", "👍"].map((emoji) => <button type="button" key={emoji} onClick={() => { setComment((value) => `${value}${emoji}`); setEmojiOpen(false) }} className="rounded-lg p-1 hover:bg-secondary">{emoji}</button>)}</div></div>}
         </div>
       </div>
+      <Dialog open={shareOpen} onOpenChange={setShareOpen}><DialogContent><DialogHeader><DialogTitle>Share post</DialogTitle><DialogDescription>Choose how you would like to share this update.</DialogDescription></DialogHeader><div className="grid gap-2"><Button variant="outline" className="justify-start gap-2" onClick={async () => { try { await navigator.clipboard.writeText(`${window.location.origin}/parent/posts/${post.id}`) } catch {} setCopied(true); setTimeout(() => setCopied(false), 1800) }}><Copy className="size-4" />{copied ? "Link copied!" : "Copy Link"}</Button><Button variant="outline" className="justify-start gap-2"><Users className="size-4" />Share to Network</Button><Button variant="outline" className="justify-start gap-2"><MessageSquare className="size-4" />Share via Message</Button></div><DialogFooter><Button variant="outline" onClick={() => setShareOpen(false)}>Done</Button></DialogFooter></DialogContent></Dialog>
     </article>
   )
 }

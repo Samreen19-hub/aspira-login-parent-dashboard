@@ -44,6 +44,10 @@ export interface EventItem {
   date: string
   time: string
   tone: 'rose' | 'blue' | 'green'
+  school?: string
+  location?: string
+  type?: string
+  description?: string
 }
 
 export interface NotificationItem {
@@ -51,6 +55,8 @@ export interface NotificationItem {
   title: string
   time: string
   unread?: boolean
+  description?: string
+  category?: string
 }
 
 export const PARENT_PROFILE = {

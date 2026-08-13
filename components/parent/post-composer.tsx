@@ -1,70 +1,26 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { Trophy, ImageIcon, BarChart3, Calendar, Send } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useAuth } from "@/lib/auth-context"
+import type { FeedPost } from "@/lib/parent-data"
 
-const actions = [
-  { key: "achievement", label: "Achievements", icon: Trophy, color: "text-amber-500" },
-  { key: "photo", label: "Upload Photo", icon: ImageIcon, color: "text-emerald-500" },
-  { key: "poll", label: "Poll", icon: BarChart3, color: "text-rose-500" },
-  { key: "event", label: "Events", icon: Calendar, color: "text-blue-500" },
-]
+const actions = [{ key: "achievement", label: "Achievements", icon: Trophy, color: "text-amber-500" }, { key: "photo", label: "Upload Photo", icon: ImageIcon, color: "text-emerald-500" }, { key: "poll", label: "Poll", icon: BarChart3, color: "text-rose-500" }, { key: "event", label: "Events", icon: Calendar, color: "text-blue-500" }] as const
+type Draft = { body: string; image?: string; hashtags?: string[] }
 
-export function PostComposer({ onPost }: { onPost?: (text: string) => void }) {
-  const { user } = useAuth()
-  const [text, setText] = useState("")
-
-  function handlePost() {
-    if (!text.trim()) return
-    onPost?.(text.trim())
-    setText("")
-  }
-
-  const initials =
-    user?.name
-      ?.split(" ")
-      .map((n) => n[0])
-      .slice(0, 2)
-      .join("") ?? "P"
-
-  return (
-    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
-      <div className="flex items-center gap-3">
-        <Avatar className="size-11 shrink-0">
-          <AvatarImage src="/avatar-rashi.png" alt={user?.name ?? "You"} />
-          <AvatarFallback>{initials}</AvatarFallback>
-        </Avatar>
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.nativeEvent.isComposing && e.keyCode !== 229) handlePost()
-          }}
-          placeholder="Share your child's achievements, moments or updates..."
-          className="h-12 w-full rounded-full border border-input bg-secondary/50 px-5 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:bg-card focus:ring-2 focus:ring-ring/20"
-          aria-label="Create a post"
-        />
-      </div>
-
-      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4">
-        {actions.map((a) => (
-          <button
-            key={a.key}
-            type="button"
-            className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
-          >
-            <a.icon className={`size-4 ${a.color}`} />
-            <span className="hidden sm:inline">{a.label}</span>
-          </button>
-        ))}
-        <Button onClick={handlePost} disabled={!text.trim()} className="gap-2 rounded-lg px-6">
-          <Send className="size-4" />
-          Post
-        </Button>
-      </div>
-    </div>
-  )
+export function PostComposer({ onPost }: { onPost?: (draft: Draft) => void }) {
+  const { user } = useAuth(); const fileRef = useRef<HTMLInputElement>(null)
+  const [text, setText] = useState(""); const [mode, setMode] = useState<typeof actions[number]["key"] | null>(null)
+  const [image, setImage] = useState<string>(); const [form, setForm] = useState({ title: "", child: "Aarav Kapoor", description: "", question: "", option1: "", option2: "", date: "", time: "", location: "" })
+  const initials = user?.name?.split(" ").map((n) => n[0]).slice(0, 2).join("") ?? "P"
+  function chooseFile(event: React.ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; if (file) setImage(URL.createObjectURL(file)) }
+  function publish() { const body = mode === "achievement" ? `Achievement: ${form.title}\n${form.child}\n${form.description}` : mode === "poll" ? `${form.question}\n1. ${form.option1}\n2. ${form.option2}` : mode === "event" ? `Event: ${form.title}\n${form.date} · ${form.time}\n${form.location}\n${form.description}` : text.trim(); if (!body.trim()) return; onPost?.({ body, image }); setText(""); setImage(undefined); setMode(null); setForm({ title: "", child: "Aarav Kapoor", description: "", question: "", option1: "", option2: "", date: "", time: "", location: "" }) }
+  return <div className="rounded-2xl border border-border bg-card p-4 shadow-sm"><div className="flex items-center gap-3"><Avatar className="size-11 shrink-0"><AvatarImage src="/avatar-rashi.png" alt={user?.name ?? "You"} /><AvatarFallback>{initials}</AvatarFallback></Avatar><input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing && e.keyCode !== 229) publish() }} placeholder="Share your child's achievements, moments or updates..." className="h-12 w-full rounded-full border border-input bg-secondary/50 px-5 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:bg-card focus:ring-2 focus:ring-ring/20" aria-label="Create a post" /></div>{image && <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground"><img src={image} alt="Selected preview" className="size-12 rounded-lg object-cover" /> Photo attached</div>}<div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4">{actions.map((a) => <button key={a.key} type="button" onClick={() => a.key === "photo" ? fileRef.current?.click() : setMode(a.key)} className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"><a.icon className={`size-4 ${a.color}`} /><span className="hidden sm:inline">{a.label}</span></button>)}<input ref={fileRef} type="file" accept="image/*" onChange={chooseFile} className="sr-only" /><Button onClick={publish} disabled={!text.trim() && !image} className="gap-2 rounded-lg px-6"><Send className="size-4" />Post</Button></div><Dialog open={mode !== null} onOpenChange={(open) => !open && setMode(null)}><DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>{mode === "achievement" ? "Share an Achievement" : mode === "poll" ? "Create a Poll" : "Create an Event"}</DialogTitle><DialogDescription>Add details to share with your Aspira network.</DialogDescription></DialogHeader><div className="grid gap-3">{mode === "poll" ? <><Field label="Poll question" value={form.question} onChange={(v) => setForm({ ...form, question: v })} /><Field label="Option 1" value={form.option1} onChange={(v) => setForm({ ...form, option1: v })} /><Field label="Option 2" value={form.option2} onChange={(v) => setForm({ ...form, option2: v })} /></> : <><Field label="Title" value={form.title} onChange={(v) => setForm({ ...form, title: v })} />{mode === "achievement" && <Field label="Child" value={form.child} onChange={(v) => setForm({ ...form, child: v })} />}{mode === "event" && <div className="grid grid-cols-2 gap-3"><Field label="Date" type="date" value={form.date} onChange={(v) => setForm({ ...form, date: v })} /><Field label="Time" type="time" value={form.time} onChange={(v) => setForm({ ...form, time: v })} /></div>}{mode === "event" && <Field label="Location" value={form.location} onChange={(v) => setForm({ ...form, location: v })} />}<div className="grid gap-2"><Label>Description</Label><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div></>}</div><DialogFooter><Button variant="outline" onClick={() => setMode(null)}>Cancel</Button><Button onClick={publish}>Publish</Button></DialogFooter></DialogContent></Dialog></div>
 }
+function Field({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) { return <div className="grid gap-2"><Label>{label}</Label><Input type={type} value={value} onChange={(e) => onChange(e.target.value)} /></div> }
