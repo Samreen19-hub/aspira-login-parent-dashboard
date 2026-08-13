@@ -19,6 +19,7 @@ export interface FeedComment {
   avatar: string
   text: string
   time: string
+  image?: string
 }
 
 export type FeedPostType = 'text' | 'achievement' | 'poll' | 'event'

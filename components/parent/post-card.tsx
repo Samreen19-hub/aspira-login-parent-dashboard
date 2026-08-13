@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import Image from "next/image"
 import { Heart, MessageCircle, Share2, Bookmark, MoreHorizontal, Globe, Smile, Camera, Send, Copy, Users, MessageSquare } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -17,7 +17,7 @@ function initialsOf(name: string) {
     .join("")
 }
 
-export function PostCard({ post }: { post: FeedPost }) {
+export function PostCard({ post, onRemove }: { post: FeedPost; onRemove?: () => void }) {
   const [liked, setLiked] = useState(false)
   const [saved, setSaved] = useState(false)
   const [showComments, setShowComments] = useState(false)
@@ -31,12 +31,20 @@ export function PostCard({ post }: { post: FeedPost }) {
   const [pollVotes, setPollVotes] = useState(post.poll?.votes ?? [])
   const [voted, setVoted] = useState<number | null>(null)
   const [feedback, setFeedback] = useState("")
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const close = (event: MouseEvent) => { if (menuRef.current && !menuRef.current.contains(event.target as Node)) setMenuOpen(false) }
+    document.addEventListener("mousedown", close)
+    return () => document.removeEventListener("mousedown", close)
+  }, [menuOpen])
 
   const likeCount = post.likes + (liked ? 1 : 0)
 
   function addComment() {
     if (!comment.trim() && !commentImage) return
-    setComments((prev) => [...prev, { id: `c-${Date.now()}`, author: "Rashi Kapoor", avatar: "/avatar-rashi.png", text: `${comment.trim()}${commentImage ? " [photo attached]" : ""}`.trim(), time: "now" }])
+    setComments((prev) => [...prev, { id: `c-${Date.now()}`, author: "Rashi Kapoor", avatar: "/avatar-rashi.png", text: comment.trim(), image: commentImage, time: "now" }])
     setComment(""); setCommentImage(undefined)
     setShowComments(true)
   }
@@ -75,7 +83,7 @@ export function PostCard({ post }: { post: FeedPost }) {
         >
           <MoreHorizontal className="size-5" />
         </button>
-        {menuOpen && <div className="absolute right-4 top-14 z-10 grid min-w-36 gap-1 rounded-xl border border-border bg-card p-1 shadow-lg"><button type="button" className="rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={() => { setSaved(true); setMenuOpen(false); setFeedback("Post saved") }}>Save post</button><button type="button" className="rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={() => { setMenuOpen(false); setFeedback("Post hidden from your feed") }}>Hide post</button><button type="button" className="rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-secondary" onClick={() => { setMenuOpen(false); setFeedback("Report submitted for review") }}>Report post</button></div>}
+        {menuOpen && <div ref={menuRef} className="absolute right-4 top-14 z-10 grid min-w-36 gap-1 rounded-xl border border-border bg-card p-1 shadow-lg"><button type="button" className="rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={() => { setSaved(true); setMenuOpen(false); setFeedback("Post saved") }}>Save post</button><button type="button" className="rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={() => { setMenuOpen(false); onRemove?.() }}>Hide post</button><button type="button" className="rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-secondary" onClick={() => { setMenuOpen(false); onRemove?.() }}>Delete post</button></div>}
       </div>
 
       {feedback && <button type="button" onClick={() => setFeedback("")} className="mx-4 mt-2 rounded-lg bg-brand-muted px-3 py-2 text-left text-sm text-brand">{feedback}</button>}
@@ -176,7 +184,8 @@ export function PostCard({ post }: { post: FeedPost }) {
                     <span className="text-sm font-semibold text-foreground">{c.author}</span>
                     <span className="text-xs text-muted-foreground">{c.time}</span>
                   </div>
-                  <p className="text-sm text-foreground">{c.text}</p>
+                  {c.text && <p className="text-sm text-foreground">{c.text}</p>}
+                  {c.image && <Image src={c.image} alt="Comment attachment" width={180} height={120} className="mt-2 rounded-lg object-cover" />}
                 </div>
               </li>
             ))}
@@ -204,6 +213,7 @@ export function PostCard({ post }: { post: FeedPost }) {
           <div className="flex items-center gap-1 text-muted-foreground">
             <button type="button" onClick={() => setEmojiOpen((v) => !v)} className="rounded-full p-1.5 hover:bg-secondary" aria-label="Add emoji"><Smile className="size-4" /></button>
             <label className="rounded-full p-1.5 hover:bg-secondary" aria-label="Add photo"><Camera className="size-4" /><input type="file" accept="image/*" className="sr-only" onChange={(e) => { const file = e.target.files?.[0]; if (file) setCommentImage(URL.createObjectURL(file)) }} /></label>
+            {commentImage && <div className="relative"><Image src={commentImage} alt="Selected comment attachment" width={52} height={52} className="size-13 rounded-lg object-cover" /><button type="button" onClick={() => setCommentImage(undefined)} className="absolute -right-1 -top-1 rounded-full bg-foreground px-1 text-xs text-background" aria-label="Remove selected photo">×</button></div>}
             <button
               type="button"
               onClick={addComment}
