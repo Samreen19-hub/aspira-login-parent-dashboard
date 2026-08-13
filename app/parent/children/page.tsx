@@ -45,7 +45,7 @@ export default function ChildrenPage() {
               </div><ProgressRing value={child.progress} size={56} />
             </div>
             <div className="flex items-center gap-2 rounded-xl bg-brand-muted px-3 py-2.5 text-sm text-brand"><TrendingUp className="size-4" /><span className="font-medium">{child.progress ? `${child.progress}% overall performance this term` : "New child profile added"}</span></div>
-            <div className="flex gap-2"><Button variant="outline" className="flex-1 rounded-xl" render={<Link href="/parent/timetable" />}>Timetable</Button><Button className="flex-1 rounded-xl" render={<Link href="/parent" />}>View Feed</Button></div>
+            <div className="flex gap-2"><Button variant="outline" className="flex-1 rounded-xl" render={<Link href="/parent/timetable" />}>Timetable</Button><Button className="flex-1 rounded-xl" render={<Link href={`/parent/children/${child.id}/feed`} />}>View Feed</Button></div>
           </Card>
         ))}
         <button type="button" onClick={() => setOpen(true)} className="flex min-h-40 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border text-muted-foreground transition-colors hover:border-brand hover:text-brand"><span className="grid size-11 place-items-center rounded-full bg-brand-muted text-brand"><Plus className="size-5" /></span><span className="text-sm font-medium">Add Another Child</span></button>

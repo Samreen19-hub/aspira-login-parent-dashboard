@@ -27,6 +27,10 @@ export function PostCard({ post }: { post: FeedPost }) {
   const [emojiOpen, setEmojiOpen] = useState(false)
   const [commentImage, setCommentImage] = useState<string>()
   const [copied, setCopied] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [pollVotes, setPollVotes] = useState(post.poll?.votes ?? [])
+  const [voted, setVoted] = useState<number | null>(null)
+  const [feedback, setFeedback] = useState("")
 
   const likeCount = post.likes + (liked ? 1 : 0)
 
@@ -38,7 +42,7 @@ export function PostCard({ post }: { post: FeedPost }) {
   }
 
   return (
-    <article className="rounded-2xl border border-border bg-card shadow-sm">
+    <article className="relative rounded-2xl border border-border bg-card shadow-sm">
       {/* Header */}
       <div className="flex items-start gap-3 p-4">
         <Avatar className="size-11">
@@ -67,10 +71,14 @@ export function PostCard({ post }: { post: FeedPost }) {
           type="button"
           className="rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-secondary"
           aria-label="Post options"
+          onClick={() => setMenuOpen((open) => !open)}
         >
           <MoreHorizontal className="size-5" />
         </button>
+        {menuOpen && <div className="absolute right-4 top-14 z-10 grid min-w-36 gap-1 rounded-xl border border-border bg-card p-1 shadow-lg"><button type="button" className="rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={() => { setSaved(true); setMenuOpen(false); setFeedback("Post saved") }}>Save post</button><button type="button" className="rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={() => { setMenuOpen(false); setFeedback("Post hidden from your feed") }}>Hide post</button><button type="button" className="rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-secondary" onClick={() => { setMenuOpen(false); setFeedback("Report submitted for review") }}>Report post</button></div>}
       </div>
+
+      {feedback && <button type="button" onClick={() => setFeedback("")} className="mx-4 mt-2 rounded-lg bg-brand-muted px-3 py-2 text-left text-sm text-brand">{feedback}</button>}
 
       {/* Body */}
       <div className="px-4 pb-3">
@@ -84,6 +92,9 @@ export function PostCard({ post }: { post: FeedPost }) {
         )}
       </div>
 
+      {post.type === "achievement" && post.achievement && <div className="mx-4 mb-3 rounded-xl bg-brand-muted p-4"><p className="text-sm font-semibold text-brand">Achievement · {post.achievement.child}</p><p className="mt-1 font-display text-lg font-bold text-foreground">{post.achievement.title}</p><p className="mt-1 text-sm text-muted-foreground">{post.achievement.description}</p></div>}
+      {post.type === "event" && post.event && <div className="mx-4 mb-3 rounded-xl border border-brand/20 bg-brand-muted p-4"><p className="text-sm font-semibold text-brand">Upcoming event</p><p className="mt-1 font-display text-lg font-bold text-foreground">{post.event.title}</p><p className="text-sm text-muted-foreground">{post.event.date} · {post.event.time} · {post.event.location}</p><p className="mt-1 text-sm text-foreground">{post.event.description}</p></div>}
+      {post.type === "poll" && post.poll && <div className="mx-4 mb-3 grid gap-2 rounded-xl border border-border p-4"><p className="font-semibold text-foreground">{post.poll.question}</p>{post.poll.options.map((option, index) => <button key={option} type="button" disabled={voted !== null} onClick={() => { if (voted === null) { setVoted(index); setPollVotes((votes) => votes.map((vote, i) => i === index ? vote + 1 : vote)) } }} className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm ${voted === index ? "border-brand bg-brand-muted text-brand" : "border-border hover:bg-secondary"}`}><span>{option}</span><span>{pollVotes[index] ?? 0}</span></button>)}</div>}
       {/* Image */}
       {post.image && (
         <div className="relative aspect-[16/9] w-full overflow-hidden bg-secondary">

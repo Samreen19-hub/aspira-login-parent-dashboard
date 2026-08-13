@@ -21,8 +21,11 @@ export interface FeedComment {
   time: string
 }
 
+export type FeedPostType = 'text' | 'achievement' | 'poll' | 'event'
+
 export interface FeedPost {
   id: string
+  type?: FeedPostType
   author: string
   role: string
   subtitle: string
@@ -36,6 +39,9 @@ export interface FeedPost {
   comments: FeedComment[]
   shares: number
   likedByLabel: string
+  achievement?: { title: string; child: string; description: string }
+  poll?: { question: string; options: string[]; votes: number[]; voted?: number }
+  event?: { title: string; date: string; time: string; location: string; description: string }
 }
 
 export interface EventItem {

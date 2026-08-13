@@ -1,30 +1,16 @@
 "use client"
 
 import { useState } from "react"
-import { PostComposer } from "@/components/parent/post-composer"
+import { PostComposer, type Draft } from "@/components/parent/post-composer"
 import { PostCard } from "@/components/parent/post-card"
 import { FEED_POSTS, type FeedPost } from "@/lib/parent-data"
 
-export function HomeFeed() {
+export function HomeFeed({ childId }: { childId?: string }) {
   const [posts, setPosts] = useState<FeedPost[]>(FEED_POSTS)
-
-  function handlePost(draft: { body: string; image?: string; hashtags?: string[] }) {
-    const newPost: FeedPost = {
-      id: `post-${Date.now()}`, author: "Rashi Kapoor", role: "Parent",
-      subtitle: "Parent of Aarav Kapoor  ·  Class 6, Greenfield Public School",
-      time: "Just now", visibility: "Public", avatar: "/avatar-rashi.png", body: draft.body,
-      image: draft.image, hashtags: draft.hashtags ?? [], likes: 0, shares: 0,
-      likedByLabel: "Be the first to react", comments: [],
-    }
+  const visiblePosts = childId ? posts.filter((post) => post.subtitle.toLowerCase().includes(childId) || post.body.toLowerCase().includes(childId)) : posts
+  function handlePost(draft: Draft) {
+    const newPost: FeedPost = { id: `post-${Date.now()}`, type: draft.type, author: "Rashi Kapoor", role: "Parent", subtitle: "Parent of Aarav Kapoor · Class 6, Greenfield Public School", time: "Just now", visibility: "Public", avatar: "/avatar-rashi.png", body: draft.body, image: draft.image, hashtags: [], likes: 0, shares: 0, likedByLabel: "Be the first to react", comments: [], achievement: draft.achievement, poll: draft.poll ? { ...draft.poll, votes: [0, 0] } : undefined, event: draft.event }
     setPosts((prev) => [newPost, ...prev])
   }
-
-  return (
-    <div className="space-y-5">
-      <PostComposer onPost={handlePost} />
-      {posts.map((post) => (
-        <PostCard key={post.id} post={post} />
-      ))}
-    </div>
-  )
+  return <div className="flex flex-col gap-5"><PostComposer onPost={handlePost} />{visiblePosts.map((post) => <PostCard key={post.id} post={post} />)}</div>
 }
