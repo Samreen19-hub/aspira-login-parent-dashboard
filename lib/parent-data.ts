@@ -22,11 +22,11 @@ export interface FeedComment {
   image?: string
 }
 
-export type FeedPostType = 'text' | 'achievement' | 'poll' | 'event'
+export type FeedPostType = 'text' | 'photo' | 'achievement' | 'poll' | 'event'
 
 export interface FeedPost {
   id: string
-  type?: FeedPostType
+  type: FeedPostType
   author: string
   role: string
   subtitle: string
@@ -98,6 +98,7 @@ export const CHILDREN: Child[] = [
 export const FEED_POSTS: FeedPost[] = [
   {
     id: 'post-robotics',
+    type: 'photo',
     author: 'Rashi Kapoor',
     role: 'Parent',
     subtitle: 'Parent of Aarav Kapoor  ·  Class 6, Greenfield Public School',
@@ -129,6 +130,7 @@ export const FEED_POSTS: FeedPost[] = [
   },
   {
     id: 'post-annual-day',
+    type: 'text',
     author: 'Greenfield Public School',
     role: 'School',
     subtitle: 'Official School Page  ·  Greenfield Public School',

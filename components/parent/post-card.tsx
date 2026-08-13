@@ -88,21 +88,11 @@ export function PostCard({ post, onRemove }: { post: FeedPost; onRemove?: () => 
 
       {feedback && <button type="button" onClick={() => setFeedback("")} className="mx-4 mt-2 rounded-lg bg-brand-muted px-3 py-2 text-left text-sm text-brand">{feedback}</button>}
 
-      {/* Body */}
-      <div className="px-4 pb-3">
-        <p className="whitespace-pre-line text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p>
-        {post.hashtags.length > 0 && (
-          <p className="mt-2 flex flex-wrap gap-x-2 text-sm font-medium text-brand">
-            {post.hashtags.map((tag) => (
-              <span key={tag}>{tag}</span>
-            ))}
-          </p>
-        )}
-      </div>
-
+      {post.type === "text" && <div className="px-4 pb-3"><p className="whitespace-pre-line text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p><Hashtags tags={post.hashtags} /></div>}
+      {post.type === "photo" && <div className="px-4 pb-3"><p className="whitespace-pre-line text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p><Hashtags tags={post.hashtags} /></div>}
       {post.type === "achievement" && post.achievement && <div className="mx-4 mb-3 rounded-xl bg-brand-muted p-4"><p className="text-sm font-semibold text-brand">Achievement · {post.achievement.child}</p><p className="mt-1 font-display text-lg font-bold text-foreground">{post.achievement.title}</p><p className="mt-1 text-sm text-muted-foreground">{post.achievement.description}</p></div>}
       {post.type === "event" && post.event && <div className="mx-4 mb-3 rounded-xl border border-brand/20 bg-brand-muted p-4"><p className="text-sm font-semibold text-brand">Upcoming event</p><p className="mt-1 font-display text-lg font-bold text-foreground">{post.event.title}</p><p className="text-sm text-muted-foreground">{post.event.date} · {post.event.time} · {post.event.location}</p><p className="mt-1 text-sm text-foreground">{post.event.description}</p></div>}
-      {post.type === "poll" && post.poll && <div className="mx-4 mb-3 grid gap-2 rounded-xl border border-border p-4"><p className="font-semibold text-foreground">{post.poll.question}</p>{post.poll.options.map((option, index) => <button key={option} type="button" disabled={voted !== null} onClick={() => { if (voted === null) { setVoted(index); setPollVotes((votes) => votes.map((vote, i) => i === index ? vote + 1 : vote)) } }} className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm ${voted === index ? "border-brand bg-brand-muted text-brand" : "border-border hover:bg-secondary"}`}><span>{option}</span><span>{pollVotes[index] ?? 0}</span></button>)}</div>}
+      {post.type === "poll" && post.poll && <PollCard poll={post.poll} pollVotes={pollVotes} voted={voted} onVote={(index) => { if (voted === null) { setVoted(index); setPollVotes((votes) => votes.map((vote, i) => i === index ? vote + 1 : vote)) } }} />}
       {/* Image */}
       {post.image && (
         <div className="relative aspect-[16/9] w-full overflow-hidden bg-secondary">
@@ -230,6 +220,16 @@ export function PostCard({ post, onRemove }: { post: FeedPost; onRemove?: () => 
       <Dialog open={shareOpen} onOpenChange={setShareOpen}><DialogContent><DialogHeader><DialogTitle>Share post</DialogTitle><DialogDescription>Choose how you would like to share this update.</DialogDescription></DialogHeader><div className="grid gap-2"><Button variant="outline" className="justify-start gap-2" onClick={async () => { try { await navigator.clipboard.writeText(`${window.location.origin}/parent/posts/${post.id}`) } catch {} setCopied(true); setTimeout(() => setCopied(false), 1800) }}><Copy className="size-4" />{copied ? "Link copied!" : "Copy Link"}</Button><Button variant="outline" className="justify-start gap-2"><Users className="size-4" />Share to Network</Button><Button variant="outline" className="justify-start gap-2"><MessageSquare className="size-4" />Share via Message</Button></div><DialogFooter><Button variant="outline" onClick={() => setShareOpen(false)}>Done</Button></DialogFooter></DialogContent></Dialog>
     </article>
   )
+}
+
+function Hashtags({ tags }: { tags: string[] }) {
+  if (!tags.length) return null
+  return <p className="mt-2 flex flex-wrap gap-x-2 text-sm font-medium text-brand">{tags.map((tag) => <span key={tag}>{tag}</span>)}</p>
+}
+
+function PollCard({ poll, pollVotes, voted, onVote }: { poll: NonNullable<FeedPost["poll"]>; pollVotes: number[]; voted: number | null; onVote: (index: number) => void }) {
+  const total = pollVotes.reduce((sum, vote) => sum + vote, 0)
+  return <div className="mx-4 mb-3 grid gap-2 rounded-xl border border-border p-4"><p className="font-semibold text-foreground">{poll.question}</p>{poll.options.map((option, index) => { const count = pollVotes[index] ?? 0; const percentage = total ? Math.round((count / total) * 100) : 0; return <button key={option} type="button" disabled={voted !== null} onClick={() => onVote(index)} className={`relative flex min-h-10 items-center justify-between overflow-hidden rounded-lg border px-3 py-2 text-left text-sm ${voted === index ? "border-brand bg-brand-muted text-brand" : "border-border hover:bg-secondary"}`}><span className="absolute inset-y-0 left-0 bg-brand-muted" style={{ width: `${percentage}%` }} /><span className="relative">{option}</span><span className="relative tabular-nums">{voted !== null ? `${percentage}%` : count}</span></button> })}<p className="text-xs text-muted-foreground">{total} {total === 1 ? "vote" : "votes"}{voted !== null ? " · You voted" : ""}</p></div>
 }
 
 function ActionButton({
