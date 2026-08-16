@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import Image from "next/image"
-import { Heart, MessageCircle, Share2, Bookmark, MoreHorizontal, Globe, Smile, Camera, Send, Copy, Users, MessageSquare } from "lucide-react"
+import { Heart, MessageCircle, Share2, Bookmark, MoreHorizontal, Globe, Smile, Camera, Send, Copy, Users, MessageSquare, Trophy, Sparkles } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -223,22 +223,17 @@ export function PostCard({ post, onRemove }: { post: FeedPost; onRemove?: () => 
 }
 
 function AchievementPost({ achievement }: { achievement: NonNullable<FeedPost["achievement"]> }) {
-  return <section aria-label={`Achievement for ${achievement.child}`} className="relative mx-4 mb-4 overflow-hidden rounded-[1.25rem] border border-[#e1b84c]/60 bg-[#fbf7ff] p-4 shadow-[0_16px_35px_-20px_rgba(91,44,181,0.65)] sm:p-6">
-    <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-70 [background-image:radial-gradient(circle_at_20%_15%,rgba(255,211,75,0.6)_0_2px,transparent_3px),radial-gradient(circle_at_82%_18%,rgba(126,74,218,0.45)_0_2px,transparent_3px),radial-gradient(circle_at_10%_75%,rgba(246,142,182,0.45)_0_2px,transparent_3px),radial-gradient(circle_at_92%_78%,rgba(255,211,75,0.55)_0_2px,transparent_3px)]" />
-    <div aria-hidden="true" className="absolute left-1/2 top-20 size-44 -translate-x-1/2 rounded-full bg-[#f7cf57]/25 blur-3xl" />
+  return <section aria-label={`Achievement for ${achievement.child}`} className="relative mx-4 mb-4 overflow-hidden rounded-2xl border border-[#d9b84c]/60 bg-[#faf7ff] px-4 py-4 shadow-sm sm:px-6">
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-60 [background-image:radial-gradient(circle_at_12%_18%,rgba(217,184,76,0.7)_0_2px,transparent_3px),radial-gradient(circle_at_88%_22%,rgba(111,50,213,0.45)_0_2px,transparent_3px),radial-gradient(circle_at_9%_84%,rgba(217,184,76,0.55)_0_2px,transparent_3px),radial-gradient(circle_at_92%_82%,rgba(111,50,213,0.4)_0_2px,transparent_3px)]" />
     <div className="relative flex flex-col items-center text-center">
-      <div className="mb-3 flex items-center gap-3 text-[#6840c9]" aria-hidden="true"><span className="h-px w-14 bg-[#d6ae3f]" /><span className="text-lg">✦</span><span className="h-px w-14 bg-[#d6ae3f]" /></div>
-      <Badge className="border-0 bg-[#6f32d5] px-4 py-1.5 text-[11px] font-bold uppercase tracking-[0.18em] text-white shadow-md">Achievement unlocked</Badge>
-      <div className="relative mt-5 grid size-28 place-items-center rounded-full border-4 border-[#f0c44c] bg-[#fff9d9] shadow-[0_0_0_8px_rgba(240,196,76,0.16),0_12px_25px_-12px_rgba(165,105,0,0.8)]" aria-hidden="true">
-        <span className="text-5xl font-serif text-[#e8b52f] drop-shadow-sm" aria-label="Trophy">♕</span>
-      </div>
-      <p className="mt-5 text-sm font-medium text-[#31205d]">We are proud to share that</p>
-      <h3 className="mt-1 max-w-full break-words font-display text-2xl font-bold text-[#5930b5] sm:text-4xl">{achievement.child}</h3>
-      <div className="my-4 flex w-full items-center gap-3" aria-hidden="true"><span className="h-px flex-1 bg-[#d9b43f]" /><span className="text-[#e1b33e]">◆</span><span className="h-px flex-1 bg-[#d9b43f]" /></div>
-      <p className="text-sm font-medium text-[#31205d]">has achieved</p>
-      <div className="relative mt-3 w-full max-w-md rounded-xl border-2 border-[#eab83c] bg-[#fffdf4] px-5 py-4 shadow-[inset_0_0_0_4px_rgba(234,184,60,0.12)]"><span aria-hidden="true" className="absolute -left-2 -top-2 text-2xl text-[#eab83c]">✦</span><span aria-hidden="true" className="absolute -right-2 -bottom-2 text-2xl text-[#eab83c]">✦</span><p className="break-words font-display text-3xl font-bold text-[#4e27a3] sm:text-5xl">{achievement.title}</p></div>
-      <div className="relative mt-5 w-full max-w-xl rounded-xl border border-[#e9be4a] bg-white/75 px-5 py-5 text-left shadow-sm sm:px-8"><span aria-hidden="true" className="absolute left-3 top-1 text-4xl leading-none text-[#6f32d5]">“</span><p className="pt-3 text-center text-sm font-semibold text-[#4e27a3] sm:text-base">{achievement.title}</p><p className="mt-2 whitespace-pre-line break-words text-center text-sm leading-6 text-[#31205d]">{achievement.description}</p><span aria-hidden="true" className="absolute bottom-0 right-3 text-4xl leading-none text-[#6f32d5]">”</span></div>
-      <div aria-hidden="true" className="mt-5 flex items-center gap-3 text-[#e1b33e]"><span>✦</span><span className="text-xl">✧</span><span>✦</span></div>
+      <div className="flex w-full items-center justify-center gap-2 text-[#cda83c]" aria-hidden="true"><span className="h-px w-12 bg-[#d9b84c]/70" /><Sparkles className="size-3.5 text-[#6f32d5]" /><Badge className="border-0 bg-[#6f32d5] px-3 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-white">Achievement unlocked</Badge><Sparkles className="size-3.5 text-[#6f32d5]" /><span className="h-px w-12 bg-[#d9b84c]/70" /></div>
+      <div className="relative mt-3 grid size-16 place-items-center rounded-full border-2 border-[#e7bd43] bg-[#fff9db] shadow-[0_0_0_5px_rgba(231,189,67,0.14),0_8px_18px_-12px_rgba(165,105,0,0.8)]" aria-hidden="true"><Trophy className="size-8 text-[#d49f17]" strokeWidth={1.7} /></div>
+      <p className="mt-3 text-xs font-medium text-[#493b70]">We are proud to share that</p>
+      <h3 className="mt-0.5 max-w-full break-words font-display text-2xl font-bold text-[#5930b5]">{achievement.child}</h3>
+      <div className="my-2 flex w-full max-w-lg items-center gap-2" aria-hidden="true"><span className="h-px flex-1 bg-[#d9b84c]/70" /><Sparkles className="size-3 text-[#d9b84c]" /><span className="h-px flex-1 bg-[#d9b84c]/70" /></div>
+      <p className="text-xs font-medium text-[#493b70]">has achieved</p>
+      <div className="relative mt-2 w-full max-w-md rounded-xl border border-[#dfb83f] bg-background px-4 py-2.5 shadow-sm"><Sparkles aria-hidden="true" className="absolute -left-2 -top-2 size-4 text-[#d9b84c]" /><Sparkles aria-hidden="true" className="absolute -right-2 -bottom-2 size-4 text-[#d9b84c]" /><p className="break-words font-display text-2xl font-bold leading-tight text-[#4e27a3]">{achievement.title}</p></div>
+      <div className="relative mt-3 w-full max-w-xl rounded-xl border border-[#ded3f2] bg-[#f4efff]/80 px-5 py-3 text-left"><span aria-hidden="true" className="absolute left-2 top-0 text-3xl leading-none text-[#8b65d6]">&ldquo;</span><p className="whitespace-pre-line break-words px-3 text-center text-sm leading-6 text-[#493b70]">{achievement.description}</p><span aria-hidden="true" className="absolute bottom-[-5px] right-2 text-3xl leading-none text-[#8b65d6]">&rdquo;</span></div>
     </div>
   </section>
 }
