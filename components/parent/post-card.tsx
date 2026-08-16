@@ -90,7 +90,7 @@ export function PostCard({ post, onRemove }: { post: FeedPost; onRemove?: () => 
 
       {post.type === "text" && <div className="px-4 pb-3"><p className="whitespace-pre-line text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p><Hashtags tags={post.hashtags} /></div>}
       {post.type === "photo" && <div className="px-4 pb-3"><p className="whitespace-pre-line text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p><Hashtags tags={post.hashtags} /></div>}
-      {post.type === "achievement" && post.achievement && <div className="mx-4 mb-3 rounded-xl bg-brand-muted p-4"><p className="text-sm font-semibold text-brand">Achievement · {post.achievement.child}</p><p className="mt-1 font-display text-lg font-bold text-foreground">{post.achievement.title}</p><p className="mt-1 text-sm text-muted-foreground">{post.achievement.description}</p></div>}
+      {post.type === "achievement" && post.achievement && <AchievementPost achievement={post.achievement} />}
       {post.type === "event" && post.event && <div className="mx-4 mb-3 rounded-xl border border-brand/20 bg-brand-muted p-4"><p className="text-sm font-semibold text-brand">Upcoming event</p><p className="mt-1 font-display text-lg font-bold text-foreground">{post.event.title}</p><p className="text-sm text-muted-foreground">{post.event.date} · {post.event.time} · {post.event.location}</p><p className="mt-1 text-sm text-foreground">{post.event.description}</p></div>}
       {post.type === "poll" && post.poll && <PollCard poll={post.poll} pollVotes={pollVotes} voted={voted} onVote={(index) => { if (index === voted) return; setPollVotes((votes) => votes.map((vote, i) => vote + (i === index ? 1 : i === voted ? -1 : 0))); setVoted(index) }} />}
       {/* Image */}
@@ -220,6 +220,27 @@ export function PostCard({ post, onRemove }: { post: FeedPost; onRemove?: () => 
       <Dialog open={shareOpen} onOpenChange={setShareOpen}><DialogContent><DialogHeader><DialogTitle>Share post</DialogTitle><DialogDescription>Choose how you would like to share this update.</DialogDescription></DialogHeader><div className="grid gap-2"><Button variant="outline" className="justify-start gap-2" onClick={async () => { try { await navigator.clipboard.writeText(`${window.location.origin}/parent/posts/${post.id}`) } catch {} setCopied(true); setTimeout(() => setCopied(false), 1800) }}><Copy className="size-4" />{copied ? "Link copied!" : "Copy Link"}</Button><Button variant="outline" className="justify-start gap-2"><Users className="size-4" />Share to Network</Button><Button variant="outline" className="justify-start gap-2"><MessageSquare className="size-4" />Share via Message</Button></div><DialogFooter><Button variant="outline" onClick={() => setShareOpen(false)}>Done</Button></DialogFooter></DialogContent></Dialog>
     </article>
   )
+}
+
+function AchievementPost({ achievement }: { achievement: NonNullable<FeedPost["achievement"]> }) {
+  return <section aria-label={`Achievement for ${achievement.child}`} className="relative mx-4 mb-4 overflow-hidden rounded-[1.25rem] border border-[#e1b84c]/60 bg-[#fbf7ff] p-4 shadow-[0_16px_35px_-20px_rgba(91,44,181,0.65)] sm:p-6">
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-70 [background-image:radial-gradient(circle_at_20%_15%,rgba(255,211,75,0.6)_0_2px,transparent_3px),radial-gradient(circle_at_82%_18%,rgba(126,74,218,0.45)_0_2px,transparent_3px),radial-gradient(circle_at_10%_75%,rgba(246,142,182,0.45)_0_2px,transparent_3px),radial-gradient(circle_at_92%_78%,rgba(255,211,75,0.55)_0_2px,transparent_3px)]" />
+    <div aria-hidden="true" className="absolute left-1/2 top-20 size-44 -translate-x-1/2 rounded-full bg-[#f7cf57]/25 blur-3xl" />
+    <div className="relative flex flex-col items-center text-center">
+      <div className="mb-3 flex items-center gap-3 text-[#6840c9]" aria-hidden="true"><span className="h-px w-14 bg-[#d6ae3f]" /><span className="text-lg">✦</span><span className="h-px w-14 bg-[#d6ae3f]" /></div>
+      <Badge className="border-0 bg-[#6f32d5] px-4 py-1.5 text-[11px] font-bold uppercase tracking-[0.18em] text-white shadow-md">Achievement unlocked</Badge>
+      <div className="relative mt-5 grid size-28 place-items-center rounded-full border-4 border-[#f0c44c] bg-[#fff9d9] shadow-[0_0_0_8px_rgba(240,196,76,0.16),0_12px_25px_-12px_rgba(165,105,0,0.8)]" aria-hidden="true">
+        <span className="text-5xl font-serif text-[#e8b52f] drop-shadow-sm" aria-label="Trophy">♕</span>
+      </div>
+      <p className="mt-5 text-sm font-medium text-[#31205d]">We are proud to share that</p>
+      <h3 className="mt-1 max-w-full break-words font-display text-2xl font-bold text-[#5930b5] sm:text-4xl">{achievement.child}</h3>
+      <div className="my-4 flex w-full items-center gap-3" aria-hidden="true"><span className="h-px flex-1 bg-[#d9b43f]" /><span className="text-[#e1b33e]">◆</span><span className="h-px flex-1 bg-[#d9b43f]" /></div>
+      <p className="text-sm font-medium text-[#31205d]">has achieved</p>
+      <div className="relative mt-3 w-full max-w-md rounded-xl border-2 border-[#eab83c] bg-[#fffdf4] px-5 py-4 shadow-[inset_0_0_0_4px_rgba(234,184,60,0.12)]"><span aria-hidden="true" className="absolute -left-2 -top-2 text-2xl text-[#eab83c]">✦</span><span aria-hidden="true" className="absolute -right-2 -bottom-2 text-2xl text-[#eab83c]">✦</span><p className="break-words font-display text-3xl font-bold text-[#4e27a3] sm:text-5xl">{achievement.title}</p></div>
+      <div className="relative mt-5 w-full max-w-xl rounded-xl border border-[#e9be4a] bg-white/75 px-5 py-5 text-left shadow-sm sm:px-8"><span aria-hidden="true" className="absolute left-3 top-1 text-4xl leading-none text-[#6f32d5]">“</span><p className="pt-3 text-center text-sm font-semibold text-[#4e27a3] sm:text-base">{achievement.title}</p><p className="mt-2 whitespace-pre-line break-words text-center text-sm leading-6 text-[#31205d]">{achievement.description}</p><span aria-hidden="true" className="absolute bottom-0 right-3 text-4xl leading-none text-[#6f32d5]">”</span></div>
+      <div aria-hidden="true" className="mt-5 flex items-center gap-3 text-[#e1b33e]"><span>✦</span><span className="text-xl">✧</span><span>✦</span></div>
+    </div>
+  </section>
 }
 
 function Hashtags({ tags }: { tags: string[] }) {
