@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import Image from "next/image"
-import { Heart, MessageCircle, Share2, Bookmark, MoreHorizontal, Globe, Smile, Camera, Send, Copy, Users, MessageSquare, Trophy, Sparkles, Leaf } from "lucide-react"
+import { Heart, MessageCircle, Share2, Bookmark, MoreHorizontal, Globe, Smile, Camera, Send, Copy, Users, MessageSquare, Trophy, Sparkles, Leaf, CalendarDays, Clock3, MapPin, Star } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -91,7 +91,7 @@ export function PostCard({ post, onRemove }: { post: FeedPost; onRemove?: () => 
       {post.type === "text" && <div className="px-4 pb-3"><p className="whitespace-pre-line text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p><Hashtags tags={post.hashtags} /></div>}
       {post.type === "photo" && <div className="px-4 pb-3"><p className="whitespace-pre-line text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p><Hashtags tags={post.hashtags} /></div>}
       {post.type === "achievement" && post.achievement && <AchievementPost achievement={post.achievement} />}
-      {post.type === "event" && post.event && <div className="mx-4 mb-3 rounded-xl border border-brand/20 bg-brand-muted p-4"><p className="text-sm font-semibold text-brand">Upcoming event</p><p className="mt-1 font-display text-lg font-bold text-foreground">{post.event.title}</p><p className="text-sm text-muted-foreground">{post.event.date} · {post.event.time} · {post.event.location}</p><p className="mt-1 text-sm text-foreground">{post.event.description}</p></div>}
+      {post.type === "event" && post.event && <EventPost event={post.event} />}
       {post.type === "poll" && post.poll && <PollCard poll={post.poll} pollVotes={pollVotes} voted={voted} onVote={(index) => { if (index === voted) return; setPollVotes((votes) => votes.map((vote, i) => vote + (i === index ? 1 : i === voted ? -1 : 0))); setVoted(index) }} />}
       {/* Image */}
       {post.image && (
@@ -237,6 +237,29 @@ function AchievementPost({ achievement }: { achievement: NonNullable<FeedPost["a
       <div className="relative mt-3 w-full max-w-xl rounded-xl border border-[#ded3f2] bg-[#f4efff]/85 px-5 py-3 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]"><span aria-hidden="true" className="absolute left-2 top-0 text-3xl leading-none text-[#8b65d6]">&ldquo;</span><p className="whitespace-pre-line break-words px-3 text-center text-sm leading-6 text-[#493b70]">{achievement.description}</p><span aria-hidden="true" className="absolute bottom-[-5px] right-2 text-3xl leading-none text-[#8b65d6]">&rdquo;</span></div><div aria-hidden="true" className="mt-4 flex items-center gap-3 text-[#d9b84c]/70"><span className="h-px w-12 bg-[#d9b84c]/60" /><Sparkles className="size-3" /><span className="h-px w-12 bg-[#d9b84c]/60" /></div>
     </div>
   </section>
+}
+
+function EventPost({ event }: { event: NonNullable<FeedPost["event"]> }) {
+  return <section aria-label={`Event: ${event.title}`} className="relative mx-4 mb-4 overflow-hidden rounded-2xl border border-[#d8c4ff] bg-[#fbf8ff] p-4 shadow-[0_10px_24px_-18px_rgba(111,50,213,0.65)] sm:p-5">
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-70 [background-image:radial-gradient(circle_at_8%_18%,rgba(232,188,82,0.7)_0_2px,transparent_3px),radial-gradient(circle_at_93%_15%,rgba(142,102,222,0.55)_0_2px,transparent_3px),radial-gradient(circle_at_46%_88%,rgba(242,164,191,0.45)_0_2px,transparent_3px)]" />
+    <div className="relative grid items-center gap-5 md:grid-cols-[minmax(0,1.08fr)_minmax(220px,0.92fr)]">
+      <div className="min-w-0">
+        <Badge className="border-0 bg-[#6f32d5] px-3 py-1 text-[11px] font-semibold text-white">Upcoming event</Badge>
+        <h3 className="mt-3 break-words font-display text-2xl font-bold leading-tight text-[#25213d] sm:text-3xl">{event.title}</h3>
+        <div className="mt-3 grid gap-2 text-sm text-[#5d527f] sm:grid-cols-3 sm:gap-3"><EventDetail icon={CalendarDays} label={event.date} /><EventDetail icon={Clock3} label={event.time} /><EventDetail icon={MapPin} label={event.location} /></div>
+        <p className="mt-3 whitespace-pre-line break-words text-sm leading-6 text-[#302b4a]">{event.description}</p>
+      </div>
+      <CalendarIllustration />
+    </div>
+  </section>
+}
+
+function EventDetail({ icon: Icon, label }: { icon: React.ElementType; label: string }) {
+  return <div className="flex min-w-0 items-center gap-1.5"><Icon className="size-4 shrink-0 text-[#6f32d5]" aria-hidden="true" /><span className="break-words">{label}</span></div>
+}
+
+function CalendarIllustration() {
+  return <div aria-hidden="true" className="relative mx-auto flex min-h-40 w-full max-w-[280px] items-center justify-center overflow-hidden rounded-2xl bg-[#f2eaff] px-4 py-5"><div className="absolute left-4 top-8 size-2 rounded-full bg-[#e3b84d]" /><div className="absolute right-6 top-5 size-2 rounded-full bg-[#8c60da]" /><Leaf className="absolute bottom-4 left-5 size-10 rotate-12 text-[#ae92ed]" /><Leaf className="absolute bottom-3 right-4 size-9 -scale-x-100 -rotate-12 text-[#ae92ed]" /><Sparkles className="absolute right-8 top-8 size-4 text-[#e1b84c]" /><div className="relative w-48 -rotate-2 rounded-xl bg-white shadow-[8px_10px_0_0_rgba(107,65,190,0.2),0_12px_20px_-12px_rgba(50,32,110,0.5)]"><div className="relative flex h-10 items-center justify-center rounded-t-xl bg-[#7540d9]"><span className="absolute -top-3 left-9 size-5 rounded-full border-4 border-[#c8b2f4] bg-white" /><span className="absolute -top-3 right-9 size-5 rounded-full border-4 border-[#c8b2f4] bg-white" /><span className="text-xs font-semibold tracking-wider text-white">EVENT</span></div><div className="grid grid-cols-4 gap-1.5 p-4">{Array.from({ length: 8 }).map((_, index) => <span key={index} className={`grid aspect-square place-items-center rounded-md ${index === 5 ? "bg-[#6f32d5] text-white shadow-sm" : "bg-[#eee8fb] text-[#b6a6db]"}`}>{index === 5 ? <Star className="size-4 fill-current" /> : ""}</span>)}</div></div></div>
 }
 
 function Hashtags({ tags }: { tags: string[] }) {
