@@ -12,9 +12,10 @@ const FOCUS_KEY = "aspira-parent-focus-post"
 export function FeedStoreProvider({ children }: { children: ReactNode }) {
   const [posts, setPosts] = useState<FeedPost[]>(FEED_POSTS)
   const [savedIds, setSavedIds] = useState<string[]>([])
-  useEffect(() => { try { const postsValue = localStorage.getItem(POSTS_KEY); const savedValue = localStorage.getItem(SAVED_KEY); if (postsValue) setPosts(JSON.parse(postsValue)); if (savedValue) setSavedIds(JSON.parse(savedValue)) } catch {} }, [])
-  useEffect(() => { localStorage.setItem(POSTS_KEY, JSON.stringify(posts)) }, [posts])
-  useEffect(() => { localStorage.setItem(SAVED_KEY, JSON.stringify(savedIds)) }, [savedIds])
+  const [hydrated, setHydrated] = useState(false)
+  useEffect(() => { try { const postsValue = localStorage.getItem(POSTS_KEY); const savedValue = localStorage.getItem(SAVED_KEY); if (postsValue) setPosts(JSON.parse(postsValue)); if (savedValue) setSavedIds(JSON.parse(savedValue)) } catch {} finally { setHydrated(true) } }, [])
+  useEffect(() => { if (!hydrated) return; localStorage.setItem(POSTS_KEY, JSON.stringify(posts)) }, [hydrated, posts])
+  useEffect(() => { if (!hydrated) return; localStorage.setItem(SAVED_KEY, JSON.stringify(savedIds)) }, [hydrated, savedIds])
   const value = useMemo(() => ({ posts, savedIds, toggleSaved: (id: string) => setSavedIds((ids) => ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id]), removePost: (id: string) => setPosts((items) => items.filter((item) => item.id !== id)), addPost: (post: FeedPost) => setPosts((items) => [post, ...items]) }), [posts, savedIds])
   return <FeedStoreContext.Provider value={value}>{children}</FeedStoreContext.Provider>
 }
