@@ -1,70 +1,54 @@
 "use client"
 
-import { useState } from "react"
-import { Trophy, ImageIcon, BarChart3, Calendar, Send } from "lucide-react"
+import { useRef, useState } from "react"
+import { Trophy, ImageIcon, BarChart3, Calendar, Send, Plus, X } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useAuth } from "@/lib/auth-context"
+import type { FeedPostType } from "@/lib/parent-data"
 
-const actions = [
-  { key: "achievement", label: "Achievements", icon: Trophy, color: "text-amber-500" },
-  { key: "photo", label: "Upload Photo", icon: ImageIcon, color: "text-emerald-500" },
-  { key: "poll", label: "Poll", icon: BarChart3, color: "text-rose-500" },
-  { key: "event", label: "Events", icon: Calendar, color: "text-blue-500" },
-]
+type Draft = { type: FeedPostType; body: string; image?: string; achievement?: { title: string; child: string; description: string }; poll?: { question: string; options: string[] }; event?: { title: string; date: string; time: string; location: string; description: string } }
+const actions = [{ key: "achievement", label: "Achievement", icon: Trophy }, { key: "photo", label: "Photo", icon: ImageIcon }, { key: "poll", label: "Poll", icon: BarChart3 }, { key: "event", label: "Event", icon: Calendar }] as const
+type Mode = Exclude<typeof actions[number]["key"], "photo">
 
-export function PostComposer({ onPost }: { onPost?: (text: string) => void }) {
-  const { user } = useAuth()
-  const [text, setText] = useState("")
+function formatEventDate(value: string) { if (!value) return ""; return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(new Date(`${value}T12:00:00`)) }
+function todayInputValue() { const today = new Date(); const offset = today.getTimezoneOffset(); return new Date(today.getTime() - offset * 60_000).toISOString().slice(0, 10) }
+const emptyForm = { title: "", child: "Aarav Kapoor", description: "", question: "", date: "", time: "", location: "" }
 
-  function handlePost() {
-    if (!text.trim()) return
-    onPost?.(text.trim())
-    setText("")
+export function PostComposer({ onPost }: { onPost?: (draft: Draft) => void }) {
+  const { user } = useAuth(); const fileRef = useRef<HTMLInputElement>(null)
+  const [text, setText] = useState(""); const [mode, setMode] = useState<Mode | null>(null); const [image, setImage] = useState<string>()
+  const [form, setForm] = useState(emptyForm); const [pollOptions, setPollOptions] = useState(["", ""]); const [eventDateError, setEventDateError] = useState("")
+  const initials = user?.name?.split(" ").map((n) => n[0]).slice(0, 2).join("") ?? "P"
+  const update = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }))
+  const chooseFile = (event: React.ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) setImage(URL.createObjectURL(file)) }
+  const openMode = (next: Mode) => { setMode(next); setEventDateError(""); if (next === "poll") setPollOptions(["", ""]) }
+  const addOption = () => setPollOptions((options) => options.length < 6 ? [...options, ""] : options)
+  const removeOption = (index: number) => setPollOptions((options) => options.length > 2 ? options.filter((_, optionIndex) => optionIndex !== index) : options)
+  const updateOption = (index: number, value: string) => setPollOptions((options) => options.map((option, optionIndex) => optionIndex === index ? value : option))
+  const validOptions = pollOptions.map((option) => option.trim()).filter(Boolean)
+  const minimumEventDate = todayInputValue()
+  const eventDateIsPast = mode === "event" && !!form.date && form.date < minimumEventDate
+  const updateForm = (key: keyof typeof form, value: string) => { update(key, value); if (key === "date") setEventDateError(value && value < todayInputValue() ? "Please select a future date for the event." : "") }
+  const hasDuplicateOptions = new Set(validOptions.map((option) => option.toLowerCase())).size !== validOptions.length
+  function publish() {
+    if (mode === "achievement" && (!form.title.trim() || !form.description.trim())) return
+    if (mode === "poll" && (!form.question.trim() || validOptions.length < 2 || hasDuplicateOptions)) return
+    if (mode === "event" && (!form.title.trim() || !form.date || !form.time || !form.location.trim())) return
+    if (mode === "event" && eventDateIsPast) { setEventDateError("Please select a future date for the event."); return }
+    const type = mode === "achievement" || mode === "poll" || mode === "event" ? mode : image ? "photo" : "text"
+    const body = type === "text" || type === "photo" ? text.trim() : ""
+    if (!body && !image && type === "text") return
+    onPost?.({ type, body, image: type === "photo" ? image : undefined, achievement: type === "achievement" ? { title: form.title, child: form.child, description: form.description } : undefined, poll: type === "poll" ? { question: form.question, options: validOptions } : undefined, event: type === "event" ? { title: form.title, date: formatEventDate(form.date), time: form.time, location: form.location, description: form.description } : undefined })
+    setText(""); setImage(undefined); setMode(null); setForm(emptyForm); setPollOptions(["", ""])
   }
-
-  const initials =
-    user?.name
-      ?.split(" ")
-      .map((n) => n[0])
-      .slice(0, 2)
-      .join("") ?? "P"
-
-  return (
-    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
-      <div className="flex items-center gap-3">
-        <Avatar className="size-11 shrink-0">
-          <AvatarImage src="/avatar-rashi.png" alt={user?.name ?? "You"} />
-          <AvatarFallback>{initials}</AvatarFallback>
-        </Avatar>
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.nativeEvent.isComposing && e.keyCode !== 229) handlePost()
-          }}
-          placeholder="Share your child's achievements, moments or updates..."
-          className="h-12 w-full rounded-full border border-input bg-secondary/50 px-5 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:bg-card focus:ring-2 focus:ring-ring/20"
-          aria-label="Create a post"
-        />
-      </div>
-
-      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4">
-        {actions.map((a) => (
-          <button
-            key={a.key}
-            type="button"
-            className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
-          >
-            <a.icon className={`size-4 ${a.color}`} />
-            <span className="hidden sm:inline">{a.label}</span>
-          </button>
-        ))}
-        <Button onClick={handlePost} disabled={!text.trim()} className="gap-2 rounded-lg px-6">
-          <Send className="size-4" />
-          Post
-        </Button>
-      </div>
-    </div>
-  )
+  const publishDisabled = mode === "poll" ? !form.question.trim() || validOptions.length < 2 || hasDuplicateOptions : mode === "achievement" ? !form.title.trim() || !form.description.trim() : mode === "event" ? !form.title.trim() || !form.date || !form.time || !form.location.trim() || eventDateIsPast : mode === null && !text.trim() && !image
+  return <div className="rounded-2xl border border-border bg-card p-4 shadow-sm"><div className="flex items-center gap-3"><Avatar className="size-11 shrink-0"><AvatarImage src={user?.avatar ?? "/avatar-rashi.png"} alt={user?.name ?? "You"} /><AvatarFallback>{initials}</AvatarFallback></Avatar><input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing && e.keyCode !== 229) publish() }} placeholder="Share your child's achievements, moments or updates..." className="h-12 w-full rounded-full border border-input bg-secondary/50 px-5 text-sm outline-none focus:border-ring focus:bg-card focus:ring-2 focus:ring-ring/20" aria-label="Create a post" /></div>{image && <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground"><img src={image} alt="Selected preview" className="size-12 rounded-lg object-cover" /> Photo attached</div>}<div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4">{actions.map((action) => <button key={action.key} type="button" onClick={() => action.key === "photo" ? fileRef.current?.click() : openMode(action.key)} className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-sm font-medium hover:bg-secondary"><action.icon className="size-4 text-brand" /><span className="hidden sm:inline">{action.label}</span></button>)}<input ref={fileRef} type="file" accept="image/*" onChange={chooseFile} className="sr-only" /><Button onClick={publish} disabled={publishDisabled} className="gap-2 rounded-lg px-6"><Send className="size-4" />Post</Button></div><Dialog open={mode !== null} onOpenChange={(open) => !open && setMode(null)}><DialogContent><DialogHeader><DialogTitle>{mode === "achievement" ? "Share an Achievement" : mode === "poll" ? "Create a Poll" : "Create an Event"}</DialogTitle><DialogDescription>Share an update with your parent network.</DialogDescription></DialogHeader><div className="grid gap-4">{mode === "achievement" && <><Field label="Achievement title" value={form.title} onChange={(value) => update("title", value)} /><Field label="Child" value={form.child} onChange={(value) => update("child", value)} /><FieldArea label="Tell your network more" value={form.description} onChange={(value) => update("description", value)} /></>}{mode === "poll" && <><Field label="Question" value={form.question} onChange={(value) => update("question", value)} /><div className="grid gap-2"><Label>Options</Label><div className="grid gap-2">{pollOptions.map((option, index) => <div key={index} className="flex items-center gap-2"><Input value={option} placeholder={`Option ${index + 1}`} onChange={(event) => updateOption(index, event.target.value)} aria-label={`Option ${index + 1}`} />{index >= 2 && <button type="button" onClick={() => removeOption(index)} className="rounded-full p-2 text-muted-foreground hover:bg-secondary hover:text-destructive" aria-label={`Remove option ${index + 1}`}><X className="size-4" /></button>}</div>)}</div><button type="button" onClick={addOption} disabled={pollOptions.length >= 6} className="mt-1 inline-flex w-fit items-center gap-1 text-sm font-medium text-brand hover:underline disabled:cursor-not-allowed disabled:opacity-50"><Plus className="size-4" />Add option <span className="text-xs text-muted-foreground">({pollOptions.length}/6)</span></button>{hasDuplicateOptions && <p className="text-xs text-destructive">Each option must be unique.</p>}</div></>}{mode === "event" && <><Field label="Event title" value={form.title} onChange={(value) => update("title", value)} /><div className="grid grid-cols-2 gap-3"><Field label="Date" type="date" min={minimumEventDate} error={eventDateError} value={form.date} onChange={(value) => updateForm("date", value)} /><Field label="Time" type="time" value={form.time} onChange={(value) => update("time", value)} /></div><Field label="Location" value={form.location} onChange={(value) => update("location", value)} /><FieldArea label="Description" value={form.description} onChange={(value) => update("description", value)} /></>}</div><DialogFooter><Button variant="outline" onClick={() => setMode(null)}>Cancel</Button><Button onClick={publish} disabled={publishDisabled}><Send className="size-4" />Publish</Button></DialogFooter></DialogContent></Dialog></div>
 }
+function Field({ label, value, onChange, type = "text", min, error }: { label: string; value: string; onChange: (value: string) => void; type?: string; min?: string; error?: string }) { return <div className="grid gap-2"><Label>{label}</Label><Input type={type} value={value} min={min} onChange={(e) => onChange(e.target.value)} aria-invalid={!!error} />{error && <p className="text-sm text-destructive" role="alert">{error}</p>}</div> }
+function FieldArea({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) { return <div className="grid gap-2"><Label>{label}</Label><Textarea value={value} onChange={(e) => onChange(e.target.value)} /></div> }
+export type { Draft }

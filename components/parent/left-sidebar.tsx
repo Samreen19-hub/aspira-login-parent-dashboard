@@ -17,7 +17,7 @@ const QUICK_ACTIONS = [
   { label: 'Timetable', href: '/parent/timetable', icon: CalendarDays },
   { label: 'Groups', href: '/parent/groups', icon: UsersRound },
   { label: 'Communities', href: '/parent/communities', icon: Globe },
-  { label: 'Saved Posts', href: '/parent/saved', icon: Bookmark },
+  { label: 'Saved Posts', href: '/parent/saved-posts', icon: Bookmark },
 ]
 
 export function LeftSidebar() {

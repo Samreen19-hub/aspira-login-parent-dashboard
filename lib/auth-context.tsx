@@ -75,9 +75,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(STORAGE_KEY)
-      if (raw) setUser(JSON.parse(raw) as AspiraUser)
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<AspiraUser>
+        if (parsed.id && parsed.name && parsed.email && parsed.persona) setUser(parsed as AspiraUser)
+        else window.localStorage.removeItem(STORAGE_KEY)
+      }
     } catch {
-      /* ignore malformed storage */
+      try { window.localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
     }
     setIsReady(true)
   }, [])

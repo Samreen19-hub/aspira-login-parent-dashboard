@@ -19,10 +19,14 @@ export interface FeedComment {
   avatar: string
   text: string
   time: string
+  image?: string
 }
+
+export type FeedPostType = 'text' | 'photo' | 'achievement' | 'poll' | 'event'
 
 export interface FeedPost {
   id: string
+  type: FeedPostType
   author: string
   role: string
   subtitle: string
@@ -36,6 +40,9 @@ export interface FeedPost {
   comments: FeedComment[]
   shares: number
   likedByLabel: string
+  achievement?: { title: string; child: string; description: string }
+  poll?: { question: string; options: string[]; votes: number[]; voted?: number }
+  event?: { title: string; date: string; time: string; location: string; description: string }
 }
 
 export interface EventItem {
@@ -44,6 +51,10 @@ export interface EventItem {
   date: string
   time: string
   tone: 'rose' | 'blue' | 'green'
+  school?: string
+  location?: string
+  type?: string
+  description?: string
 }
 
 export interface NotificationItem {
@@ -51,6 +62,8 @@ export interface NotificationItem {
   title: string
   time: string
   unread?: boolean
+  description?: string
+  category?: string
 }
 
 export const PARENT_PROFILE = {
@@ -85,6 +98,7 @@ export const CHILDREN: Child[] = [
 export const FEED_POSTS: FeedPost[] = [
   {
     id: 'post-robotics',
+    type: 'photo',
     author: 'Rashi Kapoor',
     role: 'Parent',
     subtitle: 'Parent of Aarav Kapoor  ·  Class 6, Greenfield Public School',
@@ -116,6 +130,7 @@ export const FEED_POSTS: FeedPost[] = [
   },
   {
     id: 'post-annual-day',
+    type: 'text',
     author: 'Greenfield Public School',
     role: 'School',
     subtitle: 'Official School Page  ·  Greenfield Public School',

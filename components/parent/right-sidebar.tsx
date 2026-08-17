@@ -68,7 +68,7 @@ export function RightSidebar() {
 
       {/* Upcoming Events */}
       <Card className="p-5">
-        <SectionHeader title="Upcoming Events" href="/parent/timetable" />
+        <SectionHeader title="Upcoming Events" href="/parent/events" />
         <div className="grid gap-3">
           {UPCOMING_EVENTS.map((event) => {
             const meta = EVENT_ICON[event.tone]
@@ -89,7 +89,7 @@ export function RightSidebar() {
           })}
         </div>
         <Button
-          render={<Link href="/parent/timetable" />}
+          render={<Link href="/parent/events" />}
           variant="outline"
           className="mt-4 w-full rounded-xl text-brand"
         >
