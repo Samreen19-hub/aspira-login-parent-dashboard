@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import type { FeedPost } from "@/lib/parent-data"
+import { useFeedStore } from "@/components/parent/feed-store"
 
 function initialsOf(name: string) {
   return name
@@ -17,9 +18,10 @@ function initialsOf(name: string) {
     .join("")
 }
 
-export function PostCard({ post, onRemove }: { post: FeedPost; onRemove?: () => void }) {
+export function PostCard({ post, onRemove, onOpen }: { post: FeedPost; onRemove?: () => void; onOpen?: () => void }) {
+  const { savedIds, toggleSaved } = useFeedStore()
   const [liked, setLiked] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const saved = savedIds.includes(post.id)
   const [showComments, setShowComments] = useState(false)
   const [comment, setComment] = useState("")
   const [comments, setComments] = useState(post.comments)
@@ -50,7 +52,7 @@ export function PostCard({ post, onRemove }: { post: FeedPost; onRemove?: () => 
   }
 
   return (
-    <article className="relative rounded-2xl border border-border bg-card shadow-sm">
+    <article id={`post-${post.id}`} onClick={(event) => { if ((event.target as HTMLElement).closest("button,input,label")) return; onOpen?.() }} className={`relative rounded-2xl border border-border bg-card shadow-sm ${onOpen ? "cursor-pointer" : ""}`}>
       {/* Header */}
       <div className="flex items-start gap-3 p-4">
         <Avatar className="size-11">
@@ -83,7 +85,7 @@ export function PostCard({ post, onRemove }: { post: FeedPost; onRemove?: () => 
         >
           <MoreHorizontal className="size-5" />
         </button>
-        {menuOpen && <div ref={menuRef} className="absolute right-4 top-14 z-10 grid min-w-36 gap-1 rounded-xl border border-border bg-card p-1 shadow-lg"><button type="button" className="rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={() => { setSaved(true); setMenuOpen(false); setFeedback("Post saved") }}>Save post</button><button type="button" className="rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={() => { setMenuOpen(false); onRemove?.() }}>Hide post</button><button type="button" className="rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-secondary" onClick={() => { setMenuOpen(false); onRemove?.() }}>Delete post</button></div>}
+        {menuOpen && <div ref={menuRef} className="absolute right-4 top-14 z-10 grid min-w-36 gap-1 rounded-xl border border-border bg-card p-1 shadow-lg"><button type="button" className="rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={() => { toggleSaved(post.id); setMenuOpen(false); setFeedback(saved ? "Post removed from saved posts" : "Post saved") }}>Save post</button><button type="button" className="rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={() => { setMenuOpen(false); onRemove?.() }}>Hide post</button><button type="button" className="rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-secondary" onClick={() => { setMenuOpen(false); onRemove?.() }}>Delete post</button></div>}
       </div>
 
       {feedback && <button type="button" onClick={() => setFeedback("")} className="mx-4 mt-2 rounded-lg bg-brand-muted px-3 py-2 text-left text-sm text-brand">{feedback}</button>}
@@ -131,7 +133,7 @@ export function PostCard({ post, onRemove }: { post: FeedPost; onRemove?: () => 
             icon={Bookmark}
             label="Save"
             active={saved}
-            onClick={() => setSaved((v) => !v)}
+            onClick={() => toggleSaved(post.id)}
             className="flex-none"
             iconOnly
           />
