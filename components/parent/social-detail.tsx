@@ -11,9 +11,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input"
 import { PostComposer, type Draft } from "@/components/parent/post-composer"
 import { PostCard } from "@/components/parent/post-card"
-import { useFeedStore, draftToPost } from "@/components/parent/feed-store"
+import { useFeedStore, draftToPost, readPostFocus, clearPostFocus } from "@/components/parent/feed-store"
 import { useSocialStore } from "@/components/parent/social-store"
-import { INVITE_CONTACTS } from "@/lib/parent-data"
+import { CURRENT_PARENT, INVITE_CONTACTS, otherMemberNames } from "@/lib/parent-data"
 
 function initialsOf(name: string) {
   return name
@@ -32,9 +32,22 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const [inviteOpen, setInviteOpen] = useState(false)
   const [membersOpen, setMembersOpen] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [focusedId, setFocusedId] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
   const record = getSpace(slug)
+
+  useEffect(() => {
+    const id = readPostFocus()
+    if (!id) return
+    const timer = window.setTimeout(() => {
+      document.getElementById(`post-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" })
+      setFocusedId(id)
+      clearPostFocus()
+      window.setTimeout(() => setFocusedId(null), 2200)
+    }, 150)
+    return () => window.clearTimeout(timer)
+  }, [slug])
 
   useEffect(() => {
     if (!menuOpen) return
@@ -61,12 +74,15 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const isJoined = joined.includes(slug)
   const isFollowing = following.includes(slug)
   const isGroup = kind === "groups"
+  const isMember = isGroup ? isJoined : isFollowing
   const invitedContacts = INVITE_CONTACTS.filter((contact) => invited.includes(contact.id))
-  const memberCount = record.members + (isJoined ? 1 : 0) + invitedContacts.length
+  const memberCount = record.members + (isMember ? 1 : 0) + invitedContacts.length
+  // Single source of truth: the current parent appears in the roster only while actually a member.
+  const rosterNames = isMember ? [CURRENT_PARENT, ...otherMemberNames(record)] : otherMemberNames(record)
   const feedPosts = posts.filter((post) => post.scope === slug)
 
   function handlePost(draft: Draft) {
-    addPost(draftToPost(draft, { author: "Rashi Kapoor", subtitle: `Parent of Aarav Kapoor · ${record!.title}`, avatar: "/avatar-rashi.png", scope: slug }))
+    addPost(draftToPost(draft, { author: CURRENT_PARENT, subtitle: `Parent of Aarav Kapoor · ${record!.title}`, avatar: "/avatar-rashi.png", scope: slug }))
   }
 
   async function copyLink() {
@@ -122,7 +138,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
         <div className="flex flex-col gap-5">
           <PostComposer onPost={handlePost} />
           {feedPosts.length ? (
-            feedPosts.map((post) => <PostCard key={post.id} post={post} onRemove={() => removePost(post.id)} />)
+            feedPosts.map((post) => <div key={post.id} className={focusedId === post.id ? "rounded-2xl ring-4 ring-brand/35 ring-offset-4 ring-offset-lavender transition-all" : "transition-all"}><PostCard post={post} onRemove={() => removePost(post.id)} /></div>)
           ) : (
             <Card className="border-dashed"><CardContent className="flex flex-col items-center gap-2 p-10 text-center"><span className="grid size-12 place-items-center rounded-2xl bg-brand-muted text-brand"><Users className="size-6" /></span><p className="font-semibold">No posts yet</p><p className="text-sm text-muted-foreground">Be the first to share an update with this {isGroup ? "group" : "community"}.</p></CardContent></Card>
           )}
@@ -135,13 +151,13 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
               <Badge variant="secondary" className="bg-brand-muted text-brand">{memberCount}</Badge>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
-              {record.memberNames.slice(0, 5).map((name, index) => (
+              {rosterNames.slice(0, 5).map((name) => (
                 <div key={name} className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <Avatar className="size-9"><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(name)}</AvatarFallback></Avatar>
                     <span className="text-sm font-medium">{name}</span>
                   </div>
-                  {index === 0 && <Badge variant="secondary">You</Badge>}
+                  {name === CURRENT_PARENT && <Badge variant="secondary">You</Badge>}
                 </div>
               ))}
               {invitedContacts.map((contact) => (
@@ -171,7 +187,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
       </div>
 
       <InviteMembersDialog open={inviteOpen} onOpenChange={setInviteOpen} spaceTitle={record.title} invited={invited} onInvite={(ids) => setInvited((current) => Array.from(new Set([...current, ...ids])))} />
-      <ViewAllMembersDialog open={membersOpen} onOpenChange={setMembersOpen} spaceTitle={record.title} memberNames={record.memberNames} invitedContacts={invitedContacts.map((contact) => contact.name)} />
+      <ViewAllMembersDialog open={membersOpen} onOpenChange={setMembersOpen} spaceTitle={record.title} memberNames={rosterNames} invitedContacts={invitedContacts.map((contact) => contact.name)} />
     </div>
   )
 }

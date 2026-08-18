@@ -313,6 +313,17 @@ export function getSocialSpace(slug: string) {
   return SOCIAL_SPACES.find((space) => space.slug === slug)
 }
 
+/** The signed-in demo parent. Membership is tracked live in the social store, never hardcoded per space. */
+export const CURRENT_PARENT = 'Rashi Kapoor'
+
+/**
+ * Members of a space excluding the current parent. The current parent is only ever shown as a
+ * member when they have actually joined/followed, so membership has a single source of truth.
+ */
+export function otherMemberNames(space: SocialSpace) {
+  return space.memberNames.filter((name) => name !== CURRENT_PARENT)
+}
+
 /** Realistic sample posts seeded into each group/community feed so it never looks empty. */
 function seedPostsForSpace(space: SocialSpace): FeedPost[] {
   const isGroup = space.kind === 'groups'
