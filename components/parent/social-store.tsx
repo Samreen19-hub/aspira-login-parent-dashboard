@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
 import { SOCIAL_SPACES, type SocialSpace } from "@/lib/parent-data"
 
 type SocialState = {
@@ -14,11 +14,28 @@ type SocialState = {
   getSpace: (slug: string) => SocialSpace | undefined
 }
 const SocialContext = createContext<SocialState | null>(null)
+const JOINED_KEY = "aspira-parent-joined-spaces"
+const FOLLOWING_KEY = "aspira-parent-following-spaces"
+const CREATED_KEY = "aspira-parent-created-spaces"
 
 export function SocialStoreProvider({ children }: { children: ReactNode }) {
   const [joined, setJoined] = useState<string[]>([])
   const [following, setFollowing] = useState<string[]>([])
   const [createdSpaces, setCreatedSpaces] = useState<SocialSpace[]>([])
+  const [hydrated, setHydrated] = useState(false)
+  useEffect(() => {
+    try {
+      const joinedValue = localStorage.getItem(JOINED_KEY)
+      const followingValue = localStorage.getItem(FOLLOWING_KEY)
+      const createdValue = localStorage.getItem(CREATED_KEY)
+      if (joinedValue) setJoined(JSON.parse(joinedValue))
+      if (followingValue) setFollowing(JSON.parse(followingValue))
+      if (createdValue) setCreatedSpaces(JSON.parse(createdValue))
+    } catch {} finally { setHydrated(true) }
+  }, [])
+  useEffect(() => { if (!hydrated) return; localStorage.setItem(JOINED_KEY, JSON.stringify(joined)) }, [hydrated, joined])
+  useEffect(() => { if (!hydrated) return; localStorage.setItem(FOLLOWING_KEY, JSON.stringify(following)) }, [hydrated, following])
+  useEffect(() => { if (!hydrated) return; localStorage.setItem(CREATED_KEY, JSON.stringify(createdSpaces)) }, [hydrated, createdSpaces])
   const value = useMemo<SocialState>(() => {
     const spaces = [...createdSpaces, ...SOCIAL_SPACES]
     return {
