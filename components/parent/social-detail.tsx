@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input"
 import { PostComposer, type Draft } from "@/components/parent/post-composer"
 import { PostCard } from "@/components/parent/post-card"
-import { useFeedStore, draftToPost } from "@/components/parent/feed-store"
+import { useFeedStore, draftToPost, readPostFocus, clearPostFocus } from "@/components/parent/feed-store"
 import { useSocialStore } from "@/components/parent/social-store"
 import { INVITE_CONTACTS } from "@/lib/parent-data"
 
@@ -32,9 +32,22 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const [inviteOpen, setInviteOpen] = useState(false)
   const [membersOpen, setMembersOpen] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [focusedId, setFocusedId] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
   const record = getSpace(slug)
+
+  useEffect(() => {
+    const id = readPostFocus()
+    if (!id) return
+    const timer = window.setTimeout(() => {
+      document.getElementById(`post-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" })
+      setFocusedId(id)
+      clearPostFocus()
+      window.setTimeout(() => setFocusedId(null), 2200)
+    }, 150)
+    return () => window.clearTimeout(timer)
+  }, [slug])
 
   useEffect(() => {
     if (!menuOpen) return
@@ -122,7 +135,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
         <div className="flex flex-col gap-5">
           <PostComposer onPost={handlePost} />
           {feedPosts.length ? (
-            feedPosts.map((post) => <PostCard key={post.id} post={post} onRemove={() => removePost(post.id)} />)
+            feedPosts.map((post) => <div key={post.id} className={focusedId === post.id ? "rounded-2xl ring-4 ring-brand/35 ring-offset-4 ring-offset-lavender transition-all" : "transition-all"}><PostCard post={post} onRemove={() => removePost(post.id)} /></div>)
           ) : (
             <Card className="border-dashed"><CardContent className="flex flex-col items-center gap-2 p-10 text-center"><span className="grid size-12 place-items-center rounded-2xl bg-brand-muted text-brand"><Users className="size-6" /></span><p className="font-semibold">No posts yet</p><p className="text-sm text-muted-foreground">Be the first to share an update with this {isGroup ? "group" : "community"}.</p></CardContent></Card>
           )}
