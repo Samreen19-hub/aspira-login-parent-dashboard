@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, Bell, BellOff, Check, Copy, LogOut, MoreHorizontal, Search, Settings, UserPlus, Users } from "lucide-react"
+import { ArrowLeft, Bell, BellOff, Check, Copy, Lock, LogOut, MoreHorizontal, Search, Settings, UserPlus, Users } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -24,7 +24,7 @@ function initialsOf(name: string) {
 }
 
 export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; slug: string }) {
-  const { getSpace, joined, toggleJoined, following, toggleFollowing } = useSocialStore()
+  const { getSpace, joined, toggleJoined, following, toggleFollowing, hydrated } = useSocialStore()
   const { posts, addPost, removePost } = useFeedStore()
   const [invited, setInvited] = useState<string[]>([])
   const [muted, setMuted] = useState(false)
@@ -75,6 +75,53 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const isFollowing = following.includes(slug)
   const isGroup = kind === "groups"
   const isMember = isGroup ? isJoined : isFollowing
+
+  // Wait for the persisted membership state before rendering anything private, so member-only
+  // content (feed, composer, members, invites) never flashes before the access check applies.
+  if (!hydrated) {
+    return (
+      <div className="mx-auto max-w-5xl">
+        <Link href={`/parent/${kind}`} className="inline-flex w-fit items-center gap-2 text-sm font-medium text-brand hover:underline"><ArrowLeft className="size-4" />{backLabel}</Link>
+        <Card className="mt-5 h-48 animate-pulse bg-muted/40" aria-hidden />
+        <span className="sr-only">Loading {isGroup ? "group" : "community"}…</span>
+      </div>
+    )
+  }
+
+  // Access control: someone who has not joined/followed only sees the public name and description,
+  // plus the action to join/follow. All member-only content is withheld from the route itself.
+  if (!isMember) {
+    return (
+      <div className="mx-auto flex max-w-5xl flex-col gap-5">
+        <Link href={`/parent/${kind}`} className="inline-flex w-fit items-center gap-2 text-sm font-medium text-brand hover:underline"><ArrowLeft className="size-4" />{backLabel}</Link>
+        <Card className="overflow-hidden border-brand/15">
+          <div className="bg-gradient-to-br from-brand-muted via-background to-background p-6 sm:p-8">
+            <div className="flex items-start gap-4">
+              <span className={`grid size-16 shrink-0 place-items-center rounded-2xl text-xl font-bold ${record.tone}`}>{record.initials}</span>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="secondary" className="bg-brand-muted text-brand">{record.category}</Badge>
+                  <Badge variant="outline" className="gap-1 text-muted-foreground">{isGroup ? "Group" : "Community"} · {record.privacy}</Badge>
+                </div>
+                <h1 className="mt-2 font-display text-2xl font-bold text-balance">{record.title}</h1>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground text-pretty">{record.description}</p>
+                <p className="mt-2 flex items-center gap-1.5 text-sm font-medium text-muted-foreground"><Users className="size-4" />{record.members} members</p>
+              </div>
+            </div>
+          </div>
+        </Card>
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
+            <span className="grid size-14 place-items-center rounded-2xl bg-brand-muted text-brand"><Lock className="size-7" /></span>
+            <h2 className="font-display text-lg font-semibold">{isGroup ? "This group is members only" : "This community is for followers"}</h2>
+            <p className="max-w-sm text-sm leading-6 text-muted-foreground">{isGroup ? "Join this group to see group updates and connect with members." : "Follow this community to see community updates and connect with members."}</p>
+            <Button className="mt-1 rounded-xl" onClick={() => (isGroup ? toggleJoined(slug) : toggleFollowing(slug))}>{isGroup ? <><UserPlus data-icon="inline-start" />Join group</> : <><UserPlus data-icon="inline-start" />Follow</>}</Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
   const invitedContacts = INVITE_CONTACTS.filter((contact) => invited.includes(contact.id))
   const memberCount = record.members + (isMember ? 1 : 0) + invitedContacts.length
   // Single source of truth: the current parent appears in the roster only while actually a member.

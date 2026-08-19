@@ -48,14 +48,16 @@ function SocialSection({ kind }: { kind: SocialKind }) {
   const [query, setQuery] = useState("")
   const [activeFilter, setActiveFilter] = useState("All")
   const [createOpen, setCreateOpen] = useState(false)
+  const [mineOnly, setMineOnly] = useState(false)
   const { spaces, joined, toggleJoined, following, toggleFollowing } = useSocialStore()
   const isGroups = kind === "groups"
   const Icon = isGroups ? Users : Globe2
   const sectionSpaces = useMemo(() => spaces.filter((space) => space.kind === kind), [spaces, kind])
   const items = useMemo(() => sectionSpaces.filter((space) => {
     const matchesQuery = `${space.title} ${space.description} ${space.category}`.toLowerCase().includes(query.toLowerCase())
-    return matchesQuery && (activeFilter === "All" || space.category === activeFilter)
-  }), [activeFilter, query, sectionSpaces])
+    const isMine = isGroups ? joined.includes(space.slug) : following.includes(space.slug)
+    return matchesQuery && (activeFilter === "All" || space.category === activeFilter) && (!mineOnly || isMine)
+  }), [activeFilter, query, sectionSpaces, mineOnly, isGroups, joined, following])
   const filters = ["All", ...(isGroups ? groupCategories : communityCategories)]
   return <PageShell title={isGroups ? "Groups" : "Communities"} description={isGroups ? "Connect with families across your school community." : "Discover school communities that match your interests."} icon={Icon}>
     <div className="flex flex-col gap-5">
@@ -71,8 +73,8 @@ function SocialSection({ kind }: { kind: SocialKind }) {
         </CardContent>
       </Card>
       <div className="flex flex-col gap-3 sm:flex-row"><div className="relative flex-1"><Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${kind}...`} className="h-11 rounded-xl pl-9" aria-label={`Search ${kind}`} /></div><div className="flex gap-2 overflow-x-auto pb-1">{filters.map((filter) => <Button key={filter} type="button" size="sm" variant={activeFilter === filter ? "default" : "outline"} className="shrink-0 rounded-xl" onClick={() => setActiveFilter(filter)}>{filter}</Button>)}</div></div>
-      <div className="flex items-center justify-between"><p className="text-sm font-medium text-muted-foreground">{items.length} {isGroups ? "groups" : "communities"} to explore</p><Button variant="ghost" size="sm" className="rounded-xl text-brand">{isGroups ? "My groups" : "Following"}</Button></div>
-      {items.length ? <div className="grid gap-4 md:grid-cols-2">{items.map((space) => <SocialCard key={space.slug} space={space} isJoined={joined.includes(space.slug)} isFollowing={following.includes(space.slug)} onToggle={() => (isGroups ? toggleJoined(space.slug) : toggleFollowing(space.slug))} />)}</div> : <Card className="border-dashed"><CardContent className="flex flex-col items-center gap-2 p-12 text-center"><Layers3 className="size-8 text-muted-foreground" /><p className="font-semibold">Nothing matches that search</p><p className="text-sm text-muted-foreground">Try another keyword or reset your filter.</p><Button variant="outline" className="mt-2 rounded-xl" onClick={() => { setQuery(""); setActiveFilter("All") }}>Clear filters</Button></CardContent></Card>}
+      <div className="flex items-center justify-between"><p className="text-sm font-medium text-muted-foreground">{items.length} {isGroups ? "groups" : "communities"} {mineOnly ? "" : "to explore"}</p><Button type="button" variant={mineOnly ? "secondary" : "ghost"} size="sm" className="rounded-xl text-brand" aria-pressed={mineOnly} onClick={() => setMineOnly((value) => !value)}>{isGroups ? "My groups" : "Following"}</Button></div>
+      {items.length ? <div className="grid gap-4 md:grid-cols-2">{items.map((space) => <SocialCard key={space.slug} space={space} isJoined={joined.includes(space.slug)} isFollowing={following.includes(space.slug)} onToggle={() => (isGroups ? toggleJoined(space.slug) : toggleFollowing(space.slug))} />)}</div> : <Card className="border-dashed"><CardContent className="flex flex-col items-center gap-2 p-12 text-center"><Layers3 className="size-8 text-muted-foreground" /><p className="font-semibold">{mineOnly ? (isGroups ? "You haven't joined any groups yet" : "You're not following any communities yet") : "Nothing matches that search"}</p><p className="text-sm text-muted-foreground">{mineOnly ? (isGroups ? "Join a group to see it here." : "Follow a community to see it here.") : "Try another keyword or reset your filter."}</p><Button variant="outline" className="mt-2 rounded-xl" onClick={() => { setQuery(""); setActiveFilter("All"); setMineOnly(false) }}>{mineOnly ? "Browse all" : "Clear filters"}</Button></CardContent></Card>}
     </div>
     <CreateSpaceDialog open={createOpen} onOpenChange={setCreateOpen} kind={kind} />
   </PageShell>
