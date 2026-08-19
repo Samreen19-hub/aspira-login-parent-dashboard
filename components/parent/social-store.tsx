@@ -54,7 +54,14 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
       toggleFollowing: (slug: string) => setFollowing((items) => (items.includes(slug) ? items.filter((item) => item !== slug) : [...items, slug])),
       addSpace: (space: SocialSpace) => {
         setCreatedSpaces((items) => (items.some((item) => item.slug === space.slug) ? items : [space, ...items]))
-        setJoined((items) => (items.includes(space.slug) ? items : [...items, space.slug]))
+        // The creator automatically gets the membership relationship for their new space:
+        // a Group creator becomes a member (joined), a Community creator becomes a follower (following).
+        // This is persisted alongside the space so access control recognizes the creator immediately.
+        if (space.kind === "groups") {
+          setJoined((items) => (items.includes(space.slug) ? items : [...items, space.slug]))
+        } else {
+          setFollowing((items) => (items.includes(space.slug) ? items : [...items, space.slug]))
+        }
       },
       getSpace: (slug: string) => spaces.find((space) => space.slug === slug),
     }
