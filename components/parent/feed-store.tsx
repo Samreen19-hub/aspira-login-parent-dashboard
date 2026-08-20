@@ -31,7 +31,7 @@ export function draftToPost(draft: Draft, opts: { author: string; role?: string;
   }
 }
 
-type FeedStoreValue = { posts: FeedPost[]; savedIds: string[]; toggleSaved: (id: string) => void; removePost: (id: string) => void; addPost: (post: FeedPost) => void }
+type FeedStoreValue = { posts: FeedPost[]; savedIds: string[]; toggleSaved: (id: string) => void; removePost: (id: string) => void; removePostsByScope: (scope: string) => void; addPost: (post: FeedPost) => void }
 const FeedStoreContext = createContext<FeedStoreValue | null>(null)
 const POSTS_KEY = "aspira-parent-feed-posts"
 const SAVED_KEY = "aspira-parent-saved-post-ids"
@@ -44,7 +44,7 @@ export function FeedStoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => { try { const postsValue = localStorage.getItem(POSTS_KEY); const savedValue = localStorage.getItem(SAVED_KEY); if (postsValue) { const stored: FeedPost[] = JSON.parse(postsValue); const storedIds = new Set(stored.map((post) => post.id)); const missingSeeds = SPACE_FEED_POSTS.filter((post) => !storedIds.has(post.id)); setPosts([...stored, ...missingSeeds]) } if (savedValue) setSavedIds(JSON.parse(savedValue)) } catch {} finally { setHydrated(true) } }, [])
   useEffect(() => { if (!hydrated) return; localStorage.setItem(POSTS_KEY, JSON.stringify(posts)) }, [hydrated, posts])
   useEffect(() => { if (!hydrated) return; localStorage.setItem(SAVED_KEY, JSON.stringify(savedIds)) }, [hydrated, savedIds])
-  const value = useMemo(() => ({ posts, savedIds, toggleSaved: (id: string) => setSavedIds((ids) => ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id]), removePost: (id: string) => setPosts((items) => items.filter((item) => item.id !== id)), addPost: (post: FeedPost) => setPosts((items) => [post, ...items]) }), [posts, savedIds])
+  const value = useMemo(() => ({ posts, savedIds, toggleSaved: (id: string) => setSavedIds((ids) => ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id]), removePost: (id: string) => setPosts((items) => items.filter((item) => item.id !== id)), removePostsByScope: (scope: string) => setPosts((items) => items.filter((item) => item.scope !== scope)), addPost: (post: FeedPost) => setPosts((items) => [post, ...items]) }), [posts, savedIds])
   return <FeedStoreContext.Provider value={value}>{children}</FeedStoreContext.Provider>
 }
 export function useFeedStore() { const value = useContext(FeedStoreContext); if (!value) throw new Error("useFeedStore must be used inside FeedStoreProvider"); return value }
