@@ -25,7 +25,7 @@ function initialsOf(name: string) {
 }
 
 export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; slug: string }) {
-  const { getSpace, joined, toggleJoined, following, toggleFollowing, isAdmin, removeSpace, hydrated } = useSocialStore()
+  const { getSpace, joined, toggleJoined, following, toggleFollowing, isAdmin, getAdmins, leaveSpace, removeSpace, hydrated } = useSocialStore()
   const { posts, addPost, removePost, removePostsByScope } = useFeedStore()
   const router = useRouter()
   const [invited, setInvited] = useState<string[]>([])
@@ -34,6 +34,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const [inviteOpen, setInviteOpen] = useState(false)
   const [membersOpen, setMembersOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [leaveOpen, setLeaveOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const [focusedId, setFocusedId] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -140,6 +141,20 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const rosterNames = isMember ? [CURRENT_PARENT, ...otherMemberNames(record)] : otherMemberNames(record)
   const feedPosts = posts.filter((post) => post.scope === slug)
 
+  // --- Admin leave rules --------------------------------------------------
+  // Admins besides the current parent. If any remain, the parent may leave freely because at
+  // least one admin still owns the space.
+  const admins = getAdmins(slug)
+  const otherAdmins = admins.filter((name) => name !== CURRENT_PARENT)
+  // Other members/followers who could inherit ownership (roster excluding the parent and anyone
+  // who is already an admin).
+  const transferCandidates = otherMemberNames(record).filter((name) => !admins.includes(name))
+  const isSoleAdmin = admin && otherAdmins.length === 0
+  // Sole admin with other members/followers must hand off ownership before leaving. Sole admin
+  // with nobody else cannot leave the space ownerless and is offered deletion instead.
+  const mustTransferBeforeLeaving = isSoleAdmin && transferCandidates.length > 0
+  const soleAdminNoOthers = isSoleAdmin && transferCandidates.length === 0
+
   function handlePost(draft: Draft) {
     addPost(draftToPost(draft, { author: CURRENT_PARENT, subtitle: `Parent of Aarav Kapoor · ${record!.title}`, avatar: "/avatar-rashi.png", scope: slug }))
   }
@@ -155,6 +170,23 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
     removePostsByScope(slug)
     removeSpace(slug)
     setDeleteOpen(false)
+    router.push(`/parent/${kind}`)
+  }
+
+  // Non-admins, and admins with a co-admin, leave directly. Admins who are the sole admin go
+  // through the dialog (transfer ownership, or delete when nobody else is present).
+  function handleLeaveClick() {
+    if (admin && isSoleAdmin) { setLeaveOpen(true); setMenuOpen(false); return }
+    leaveSpace(slug)
+    setMenuOpen(false)
+    router.push(`/parent/${kind}`)
+  }
+
+  // Sole admin picks a member/follower to inherit ownership; they become admin and the current
+  // parent leaves immediately as a normal member/follower.
+  function handleTransferAndLeave(newAdmin: string) {
+    leaveSpace(slug, newAdmin)
+    setLeaveOpen(false)
     router.push(`/parent/${kind}`)
   }
 
@@ -193,7 +225,12 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
                   <button type="button" className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={() => { setMuted((value) => !value); setMenuOpen(false) }}>{muted ? <Bell className="size-4" /> : <BellOff className="size-4" />}{muted ? "Unmute notifications" : "Mute notifications"}</button>
                   <button type="button" className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={copyLink}><Copy className="size-4" />Copy invite link</button>
                   {admin ? (
-                    <button type="button" className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-secondary" onClick={() => { setDeleteOpen(true); setMenuOpen(false) }}><Trash2 className="size-4" />{isGroup ? "Delete group" : "Delete community"}</button>
+                    <>
+                      {/* Admin sees BOTH leave and delete. Leaving as sole admin opens the
+                          transfer/delete flow; with a co-admin it leaves immediately. */}
+                      <button type="button" className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={handleLeaveClick}><LogOut className="size-4" />{isGroup ? "Leave group" : "Unfollow"}</button>
+                      <button type="button" className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-secondary" onClick={() => { setDeleteOpen(true); setMenuOpen(false) }}><Trash2 className="size-4" />{isGroup ? "Delete group" : "Delete community"}</button>
+                    </>
                   ) : (
                     <button type="button" className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-secondary" onClick={() => { if (isGroup) { if (isJoined) toggleJoined(slug) } else if (isFollowing) toggleFollowing(slug); setMenuOpen(false) }}><LogOut className="size-4" />{isGroup ? (isJoined ? "Leave group" : "Not a member") : isFollowing ? "Unfollow" : "Not following"}</button>
                   )}
