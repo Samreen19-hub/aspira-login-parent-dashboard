@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, Bell, BellOff, Check, Copy, Lock, LogOut, MoreHorizontal, Search, Settings, UserPlus, Users } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { ArrowLeft, Bell, BellOff, Check, Copy, Lock, LogOut, MoreHorizontal, Search, Settings, ShieldCheck, Trash2, UserPlus, Users } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -24,13 +25,15 @@ function initialsOf(name: string) {
 }
 
 export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; slug: string }) {
-  const { getSpace, joined, toggleJoined, following, toggleFollowing, hydrated } = useSocialStore()
-  const { posts, addPost, removePost } = useFeedStore()
+  const { getSpace, joined, toggleJoined, following, toggleFollowing, isAdmin, removeSpace, hydrated } = useSocialStore()
+  const { posts, addPost, removePost, removePostsByScope } = useFeedStore()
+  const router = useRouter()
   const [invited, setInvited] = useState<string[]>([])
   const [muted, setMuted] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [inviteOpen, setInviteOpen] = useState(false)
   const [membersOpen, setMembersOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const [focusedId, setFocusedId] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -75,6 +78,14 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const isFollowing = following.includes(slug)
   const isGroup = kind === "groups"
   const isMember = isGroup ? isJoined : isFollowing
+  // Owner/admin always has full access regardless of Public/Private, and is not required to
+  // manually join/follow (the store already assigns membership on creation).
+  const admin = isAdmin(slug)
+  const hasFullAccess = admin || isMember
+  const isPublic = record.privacy === "Public"
+  // Public spaces let anyone read the feed and basic info; private spaces reveal nothing until
+  // the parent joins/follows. Full access (member/follower/admin) always sees everything.
+  const canViewPosts = hasFullAccess || isPublic
 
   // Wait for the persisted membership state before rendering anything private, so member-only
   // content (feed, composer, members, invites) never flashes before the access check applies.
@@ -88,9 +99,10 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
     )
   }
 
-  // Access control: someone who has not joined/followed only sees the public name and description,
-  // plus the action to join/follow. All member-only content is withheld from the route itself.
-  if (!isMember) {
+  // Access control for PRIVATE spaces: someone who has not joined/followed only sees the public
+  // name and description, plus the action to join/follow. All other content — posts, composer,
+  // members, invites — is withheld from the route itself, so direct navigation is also blocked.
+  if (!canViewPosts) {
     return (
       <div className="mx-auto flex max-w-5xl flex-col gap-5">
         <Link href={`/parent/${kind}`} className="inline-flex w-fit items-center gap-2 text-sm font-medium text-brand hover:underline"><ArrowLeft className="size-4" />{backLabel}</Link>
@@ -137,6 +149,15 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
     setCopied(true); setMenuOpen(false); window.setTimeout(() => setCopied(false), 1800)
   }
 
+  // Admin-only. Removes the space and its scoped posts, then returns to the listing so the user
+  // is never left on a broken detail route.
+  function handleDelete() {
+    removePostsByScope(slug)
+    removeSpace(slug)
+    setDeleteOpen(false)
+    router.push(`/parent/${kind}`)
+  }
+
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5">
       <Link href={`/parent/${kind}`} className="inline-flex w-fit items-center gap-2 text-sm font-medium text-brand hover:underline"><ArrowLeft className="size-4" />{backLabel}</Link>
@@ -151,6 +172,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="secondary" className="bg-brand-muted text-brand">{record.category}</Badge>
                   <Badge variant="outline" className="gap-1 text-muted-foreground">{isGroup ? "Group" : "Community"} · {record.privacy}</Badge>
+                  {admin && <Badge variant="secondary" className="gap-1 bg-brand text-brand-foreground"><ShieldCheck className="size-3.5" />Admin</Badge>}
                 </div>
                 <h1 className="mt-2 font-display text-2xl font-bold text-balance">{record.title}</h1>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground text-pretty">{record.description}</p>
@@ -170,7 +192,11 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
                 <div ref={menuRef} className="absolute right-0 top-12 z-20 grid min-w-52 gap-1 rounded-xl border border-border bg-card p-1 shadow-lg">
                   <button type="button" className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={() => { setMuted((value) => !value); setMenuOpen(false) }}>{muted ? <Bell className="size-4" /> : <BellOff className="size-4" />}{muted ? "Unmute notifications" : "Mute notifications"}</button>
                   <button type="button" className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary" onClick={copyLink}><Copy className="size-4" />Copy invite link</button>
-                  <button type="button" className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-secondary" onClick={() => { if (isGroup) { if (isJoined) toggleJoined(slug) } else if (isFollowing) toggleFollowing(slug); setMenuOpen(false) }}><LogOut className="size-4" />{isGroup ? (isJoined ? "Leave group" : "Not a member") : isFollowing ? "Unfollow" : "Not following"}</button>
+                  {admin ? (
+                    <button type="button" className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-secondary" onClick={() => { setDeleteOpen(true); setMenuOpen(false) }}><Trash2 className="size-4" />{isGroup ? "Delete group" : "Delete community"}</button>
+                  ) : (
+                    <button type="button" className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-secondary" onClick={() => { if (isGroup) { if (isJoined) toggleJoined(slug) } else if (isFollowing) toggleFollowing(slug); setMenuOpen(false) }}><LogOut className="size-4" />{isGroup ? (isJoined ? "Leave group" : "Not a member") : isFollowing ? "Unfollow" : "Not following"}</button>
+                  )}
                 </div>
               )}
             </div>
@@ -183,15 +209,28 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
       {/* Feed + members */}
       <div className="grid items-start gap-5 lg:grid-cols-[1fr_320px]">
         <div className="flex flex-col gap-5">
-          <PostComposer onPost={handlePost} />
+          {hasFullAccess ? (
+            <PostComposer onPost={handlePost} />
+          ) : (
+            <Card className="border-dashed">
+              <CardContent className="flex flex-col items-center gap-3 p-6 text-center sm:flex-row sm:text-left">
+                <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-brand-muted text-brand"><Lock className="size-5" /></span>
+                <p className="flex-1 text-sm leading-6 text-muted-foreground">{isGroup ? "Join this group to participate and post updates." : "Follow this community to participate and post updates."}</p>
+                <Button className="rounded-xl" onClick={() => (isGroup ? toggleJoined(slug) : toggleFollowing(slug))}><UserPlus data-icon="inline-start" />{isGroup ? "Join group" : "Follow"}</Button>
+              </CardContent>
+            </Card>
+          )}
           {feedPosts.length ? (
-            feedPosts.map((post) => <div key={post.id} className={focusedId === post.id ? "rounded-2xl ring-4 ring-brand/35 ring-offset-4 ring-offset-lavender transition-all" : "transition-all"}><PostCard post={post} onRemove={() => removePost(post.id)} /></div>)
+            feedPosts.map((post) => <div key={post.id} className={focusedId === post.id ? "rounded-2xl ring-4 ring-brand/35 ring-offset-4 ring-offset-lavender transition-all" : "transition-all"}><PostCard post={post} onRemove={hasFullAccess ? () => removePost(post.id) : undefined} /></div>)
           ) : (
             <Card className="border-dashed"><CardContent className="flex flex-col items-center gap-2 p-10 text-center"><span className="grid size-12 place-items-center rounded-2xl bg-brand-muted text-brand"><Users className="size-6" /></span><p className="font-semibold">No posts yet</p><p className="text-sm text-muted-foreground">Be the first to share an update with this {isGroup ? "group" : "community"}.</p></CardContent></Card>
           )}
         </div>
 
         <div className="flex flex-col gap-5 lg:sticky lg:top-6">
+          {/* Members and invites are only ever shown to members/followers/admins. Public
+              non-members can read the feed but never see who is in the space. */}
+          {hasFullAccess && (
           <Card>
             <CardHeader className="flex flex-row items-center justify-between gap-2">
               <CardTitle className="font-display text-base">Members</CardTitle>
@@ -222,6 +261,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
               </div>
             </CardContent>
           </Card>
+          )}
 
           <Card>
             <CardHeader><CardTitle className="font-display text-base">About</CardTitle></CardHeader>
@@ -235,7 +275,29 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
 
       <InviteMembersDialog open={inviteOpen} onOpenChange={setInviteOpen} spaceTitle={record.title} invited={invited} onInvite={(ids) => setInvited((current) => Array.from(new Set([...current, ...ids])))} />
       <ViewAllMembersDialog open={membersOpen} onOpenChange={setMembersOpen} spaceTitle={record.title} memberNames={rosterNames} invitedContacts={invitedContacts.map((contact) => contact.name)} />
+      {admin && <DeleteSpaceDialog open={deleteOpen} onOpenChange={setDeleteOpen} isGroup={isGroup} onConfirm={handleDelete} />}
     </div>
+  )
+}
+
+function DeleteSpaceDialog({ open, onOpenChange, isGroup, onConfirm }: { open: boolean; onOpenChange: (open: boolean) => void; isGroup: boolean; onConfirm: () => void }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{isGroup ? "Delete this group?" : "Delete this community?"}</DialogTitle>
+          <DialogDescription>
+            {isGroup
+              ? "This will permanently delete the group, its posts, events, and membership data. This action cannot be undone."
+              : "This will permanently delete the community, its posts, events, and follower data. This action cannot be undone."}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="destructive" onClick={onConfirm}><Trash2 data-icon="inline-start" />{isGroup ? "Delete Group" : "Delete Community"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
