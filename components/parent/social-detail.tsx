@@ -25,7 +25,7 @@ function initialsOf(name: string) {
 }
 
 export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; slug: string }) {
-  const { getSpace, joined, toggleJoined, following, toggleFollowing, isAdmin, getAdmins, leaveSpace, removeSpace, removeMember, getRemovedMembers, hydrated } = useSocialStore()
+  const { getSpace, joined, toggleJoined, following, toggleFollowing, isAdmin, getAdmins, makeAdmin, leaveSpace, removeSpace, removeMember, getRemovedMembers, hydrated } = useSocialStore()
   const { posts, addPost, removePost, removePostsByScope } = useFeedStore()
   const router = useRouter()
   const [invited, setInvited] = useState<string[]>([])
@@ -37,6 +37,8 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const [leaveOpen, setLeaveOpen] = useState(false)
   // Member the admin is about to remove (drives the confirmation dialog). Null when idle.
   const [removeTarget, setRemoveTarget] = useState<string | null>(null)
+  // Member/follower the admin is about to promote to admin. Null when idle.
+  const [makeAdminTarget, setMakeAdminTarget] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [focusedId, setFocusedId] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -201,13 +203,21 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
     setRemoveTarget(null)
   }
 
+  // Admin-only. Confirms promoting the pending member/follower to admin. Existing admins remain.
+  function handleConfirmMakeAdmin() {
+    if (makeAdminTarget) makeAdmin(slug, makeAdminTarget)
+    setMakeAdminTarget(null)
+  }
+
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5">
       <Link href={`/parent/${kind}`} className="inline-flex w-fit items-center gap-2 text-sm font-medium text-brand hover:underline"><ArrowLeft className="size-4" />{backLabel}</Link>
 
-      {/* Header */}
-      <Card className="overflow-hidden border-brand/15">
-        <div className="bg-gradient-to-br from-brand-muted via-background to-background p-6 sm:p-8">
+      {/* Header. overflow-visible (overriding the Card default overflow-hidden) so the admin
+          settings dropdown — which extends below the card edge — is never clipped. The inner
+          gradient keeps rounded corners so the card visual is unchanged. */}
+      <Card className="overflow-visible border-brand/15">
+        <div className="rounded-xl bg-gradient-to-br from-brand-muted via-background to-background p-6 sm:p-8">
           <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex items-start gap-4">
               <span className={`grid size-16 shrink-0 place-items-center rounded-2xl text-xl font-bold ${record.tone}`}>{record.initials}</span>
@@ -285,15 +295,26 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
               <Badge variant="secondary" className="bg-brand-muted text-brand">{memberCount}</Badge>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
-              {rosterNames.slice(0, 5).map((name) => (
-                <div key={name} className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <Avatar className="size-9"><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(name)}</AvatarFallback></Avatar>
-                    <span className="text-sm font-medium">{name}</span>
+              {rosterNames.slice(0, 5).map((name) => {
+                // Admin identification is visible to every member/follower, not just admins.
+                const isRowAdmin = admins.includes(name)
+                return (
+                  <div key={name} className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <Avatar className="size-9"><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(name)}</AvatarFallback></Avatar>
+                      <span className="text-sm font-medium">{name}</span>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {isRowAdmin ? (
+                        <Badge variant="secondary" className="gap-1 bg-brand text-brand-foreground"><ShieldCheck className="size-3" />Admin</Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Member</span>
+                      )}
+                      {name === CURRENT_PARENT && <Badge variant="secondary">You</Badge>}
+                    </div>
                   </div>
-                  {name === CURRENT_PARENT && <Badge variant="secondary">You</Badge>}
-                </div>
-              ))}
+                )
+              })}
               {invitedContacts.map((contact) => (
                 <div key={contact.id} className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
@@ -305,8 +326,10 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
               ))}
               <div className="mt-1 grid gap-2">
                 <Button variant="outline" className="w-full rounded-xl" onClick={() => setMembersOpen(true)}><Users data-icon="inline-start" />{admin ? "Manage members" : "View all members"}</Button>
-                {/* Inviting is an admin management control only. */}
-                {admin && <Button className="w-full rounded-xl" onClick={() => setInviteOpen(true)}><UserPlus data-icon="inline-start" />Invite members</Button>}
+                {/* Inviting is available to every member/follower (and admins). This whole card is
+                    rendered only when hasFullAccess is true, so non-members/non-followers never
+                    reach it — matching the group/community invite permission rules. */}
+                <Button className="w-full rounded-xl" onClick={() => setInviteOpen(true)}><UserPlus data-icon="inline-start" />Invite members</Button>
               </div>
             </CardContent>
           </Card>
@@ -323,9 +346,10 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
       </div>
 
       <InviteMembersDialog open={inviteOpen} onOpenChange={setInviteOpen} spaceTitle={record.title} invited={invited} onInvite={(ids) => setInvited((current) => Array.from(new Set([...current, ...ids])))} />
-      <ViewAllMembersDialog open={membersOpen} onOpenChange={setMembersOpen} spaceTitle={record.title} memberNames={rosterNames} invitedContacts={invitedContacts.map((contact) => contact.name)} canManage={admin} onRequestRemove={(name) => setRemoveTarget(name)} />
+      <ViewAllMembersDialog open={membersOpen} onOpenChange={setMembersOpen} spaceTitle={record.title} memberNames={rosterNames} invitedContacts={invitedContacts.map((contact) => contact.name)} admins={admins} canManage={admin} onRequestRemove={(name) => setRemoveTarget(name)} onRequestMakeAdmin={(name) => setMakeAdminTarget(name)} />
       {admin && <DeleteSpaceDialog open={deleteOpen} onOpenChange={setDeleteOpen} isGroup={isGroup} memberCount={memberCount} onConfirm={handleDelete} />}
       {admin && <RemoveMemberDialog open={removeTarget !== null} onOpenChange={(value) => { if (!value) setRemoveTarget(null) }} isGroup={isGroup} memberName={removeTarget ?? ""} onConfirm={handleConfirmRemove} />}
+      {admin && <MakeAdminDialog open={makeAdminTarget !== null} onOpenChange={(value) => { if (!value) setMakeAdminTarget(null) }} isGroup={isGroup} memberName={makeAdminTarget ?? ""} onConfirm={handleConfirmMakeAdmin} />}
       {admin && (
         <LeaveSpaceDialog
           open={leaveOpen}
@@ -379,6 +403,27 @@ function RemoveMemberDialog({ open, onOpenChange, isGroup, memberName, onConfirm
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button variant="destructive" onClick={onConfirm}><UserMinus data-icon="inline-start" />Remove Member</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Admin-only confirmation before promoting a member/follower to admin. Existing admins are kept,
+// so the space can have multiple admins.
+function MakeAdminDialog({ open, onOpenChange, isGroup, memberName, onConfirm }: { open: boolean; onOpenChange: (open: boolean) => void; isGroup: boolean; memberName: string; onConfirm: () => void }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Make Admin?</DialogTitle>
+          <DialogDescription>
+            {memberName} will become an Admin of this {isGroup ? "group" : "community"}.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={onConfirm}><ShieldCheck data-icon="inline-start" />Make Admin</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -470,9 +515,10 @@ function InviteMembersDialog({ open, onOpenChange, spaceTitle, invited, onInvite
   )
 }
 
-// When `canManage` is set (admin), each other member/follower gets a Remove action. The current
-// parent (always first, badged "You") can never be removed here — self-exit uses Leave/Unfollow.
-function ViewAllMembersDialog({ open, onOpenChange, spaceTitle, memberNames, invitedContacts, canManage, onRequestRemove }: { open: boolean; onOpenChange: (open: boolean) => void; spaceTitle: string; memberNames: string[]; invitedContacts: string[]; canManage?: boolean; onRequestRemove?: (name: string) => void }) {
+// Admin identification (the Admin badge) is shown to everyone. When `canManage` is set (admin),
+// each eligible member/follower also gets "Make Admin" and Remove actions. The current parent
+// (always first, badged "You") can never be removed here — self-exit uses Leave/Unfollow.
+function ViewAllMembersDialog({ open, onOpenChange, spaceTitle, memberNames, invitedContacts, admins, canManage, onRequestRemove, onRequestMakeAdmin }: { open: boolean; onOpenChange: (open: boolean) => void; spaceTitle: string; memberNames: string[]; invitedContacts: string[]; admins: string[]; canManage?: boolean; onRequestRemove?: (name: string) => void; onRequestMakeAdmin?: (name: string) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -483,17 +529,25 @@ function ViewAllMembersDialog({ open, onOpenChange, spaceTitle, memberNames, inv
         <ul className="max-h-80 space-y-1 overflow-y-auto">
           {memberNames.map((name, index) => {
             const isSelf = name === CURRENT_PARENT
+            const isRowAdmin = admins.includes(name)
             return (
               <li key={name} className="flex items-center justify-between gap-3 rounded-xl p-2">
                 <div className="flex min-w-0 items-center gap-3">
                   <Avatar className="size-9"><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(name)}</AvatarFallback></Avatar>
                   <span className="truncate text-sm font-medium">{name}</span>
                 </div>
-                {index === 0 && isSelf ? (
-                  <Badge variant="secondary">You</Badge>
-                ) : canManage && !isSelf ? (
-                  <Button variant="ghost" size="sm" className="h-8 shrink-0 rounded-lg text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => onRequestRemove?.(name)}><UserMinus data-icon="inline-start" />Remove</Button>
-                ) : null}
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {/* Admin role is always identified. */}
+                  {isRowAdmin && <Badge variant="secondary" className="gap-1 bg-brand text-brand-foreground"><ShieldCheck className="size-3" />Admin</Badge>}
+                  {index === 0 && isSelf && <Badge variant="secondary">You</Badge>}
+                  {/* Admin-only controls. Only offered for other members who are not yet admins. */}
+                  {canManage && !isSelf && !isRowAdmin && (
+                    <>
+                      <Button variant="outline" size="sm" className="h-8 rounded-lg" onClick={() => onRequestMakeAdmin?.(name)}><ShieldCheck data-icon="inline-start" />Make Admin</Button>
+                      <Button variant="ghost" size="sm" className="h-8 rounded-lg text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => onRequestRemove?.(name)}><UserMinus data-icon="inline-start" />Remove</Button>
+                    </>
+                  )}
+                </div>
               </li>
             )
           })}
