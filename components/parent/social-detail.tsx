@@ -326,8 +326,10 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
               ))}
               <div className="mt-1 grid gap-2">
                 <Button variant="outline" className="w-full rounded-xl" onClick={() => setMembersOpen(true)}><Users data-icon="inline-start" />{admin ? "Manage members" : "View all members"}</Button>
-                {/* Inviting is an admin management control only. */}
-                {admin && <Button className="w-full rounded-xl" onClick={() => setInviteOpen(true)}><UserPlus data-icon="inline-start" />Invite members</Button>}
+                {/* Inviting is available to every member/follower (and admins). This whole card is
+                    rendered only when hasFullAccess is true, so non-members/non-followers never
+                    reach it — matching the group/community invite permission rules. */}
+                <Button className="w-full rounded-xl" onClick={() => setInviteOpen(true)}><UserPlus data-icon="inline-start" />Invite members</Button>
               </div>
             </CardContent>
           </Card>
