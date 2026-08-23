@@ -22,6 +22,9 @@ type SocialState = {
   removeSpace: (slug: string) => void
   isAdmin: (slug: string) => boolean
   getAdmins: (slug: string) => string[]
+  // Admin-only. Promotes an existing member/follower to admin. Existing admins are preserved, so a
+  // space can have any number of admins. No-op if the person is already an admin.
+  makeAdmin: (slug: string, name: string) => void
   getRemovedMembers: (slug: string) => string[]
   // Admin-only. Removes a member/follower (never the current parent — self-exit uses leaveSpace).
   removeMember: (slug: string, name: string) => void
@@ -122,6 +125,15 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
       removeMember: (slug: string, name: string) => {
         if (name === CURRENT_PARENT) return
         setRemovedMembers((current) => {
+          const existing = current[slug] ?? []
+          if (existing.includes(name)) return current
+          return { ...current, [slug]: [...existing, name] }
+        })
+      },
+      // Admin-only promotion. Adds the person to the space's admin list without removing anyone,
+      // so multiple admins coexist. Persisted via the ADMIN_KEY effect so the role survives refresh.
+      makeAdmin: (slug: string, name: string) => {
+        setSpaceAdmins((current) => {
           const existing = current[slug] ?? []
           if (existing.includes(name)) return current
           return { ...current, [slug]: [...existing, name] }
