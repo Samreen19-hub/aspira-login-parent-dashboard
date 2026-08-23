@@ -10,6 +10,10 @@ type SocialState = {
   // Per-space admins tracked by member name. The current parent is `CURRENT_PARENT`. This lets a
   // space have multiple admins and lets ownership be transferred to another member/follower.
   spaceAdmins: Record<string, string[]>
+  // Members/followers an admin has removed, keyed by slug and stored as member names. The base
+  // roster (`memberNames`) is static sample data, so removals are tracked here and subtracted from
+  // the roster and member count wherever they are derived.
+  removedMembers: Record<string, string[]>
   spaces: SocialSpace[]
   hydrated: boolean
   toggleJoined: (slug: string) => void
@@ -18,6 +22,9 @@ type SocialState = {
   removeSpace: (slug: string) => void
   isAdmin: (slug: string) => boolean
   getAdmins: (slug: string) => string[]
+  getRemovedMembers: (slug: string) => string[]
+  // Admin-only. Removes a member/follower (never the current parent — self-exit uses leaveSpace).
+  removeMember: (slug: string, name: string) => void
   // Current parent leaves a space. When they are the sole admin, `transferTo` names the
   // member/follower who becomes the new admin so the space is never left ownerless.
   leaveSpace: (slug: string, transferTo?: string) => void
@@ -28,6 +35,7 @@ const JOINED_KEY = "aspira-parent-joined-spaces"
 const FOLLOWING_KEY = "aspira-parent-following-spaces"
 const CREATED_KEY = "aspira-parent-created-spaces"
 const ADMIN_KEY = "aspira-parent-space-admins"
+const REMOVED_KEY = "aspira-parent-removed-members"
 const LEGACY_ADMIN_KEY = "aspira-parent-admin-spaces"
 
 // Seed the current parent into some spaces (and not others) so both joined/unjoined and
@@ -42,6 +50,8 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
   // Admins per space, keyed by slug and stored as member names. Only spaces the parent created
   // seed the current parent as admin, so the seeded spaces never grant admin/delete powers.
   const [spaceAdmins, setSpaceAdmins] = useState<Record<string, string[]>>({})
+  // Members an admin has removed per space. Subtracted from the derived roster/count in the UI.
+  const [removedMembers, setRemovedMembers] = useState<Record<string, string[]>>({})
   const [hydrated, setHydrated] = useState(false)
   useEffect(() => {
     try {
@@ -49,9 +59,11 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
       const followingValue = localStorage.getItem(FOLLOWING_KEY)
       const createdValue = localStorage.getItem(CREATED_KEY)
       const adminValue = localStorage.getItem(ADMIN_KEY)
+      const removedValue = localStorage.getItem(REMOVED_KEY)
       if (joinedValue) setJoined(JSON.parse(joinedValue))
       if (followingValue) setFollowing(JSON.parse(followingValue))
       if (createdValue) setCreatedSpaces(JSON.parse(createdValue))
+      if (removedValue) setRemovedMembers(JSON.parse(removedValue))
       if (adminValue) {
         setSpaceAdmins(JSON.parse(adminValue))
       } else {
@@ -69,6 +81,7 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => { if (!hydrated) return; localStorage.setItem(FOLLOWING_KEY, JSON.stringify(following)) }, [hydrated, following])
   useEffect(() => { if (!hydrated) return; localStorage.setItem(CREATED_KEY, JSON.stringify(createdSpaces)) }, [hydrated, createdSpaces])
   useEffect(() => { if (!hydrated) return; localStorage.setItem(ADMIN_KEY, JSON.stringify(spaceAdmins)) }, [hydrated, spaceAdmins])
+  useEffect(() => { if (!hydrated) return; localStorage.setItem(REMOVED_KEY, JSON.stringify(removedMembers)) }, [hydrated, removedMembers])
   const value = useMemo<SocialState>(() => {
     const spaces = [...createdSpaces, ...SOCIAL_SPACES]
     return {
@@ -76,6 +89,7 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
       following,
       createdSpaces,
       spaceAdmins,
+      removedMembers,
       spaces,
       hydrated,
       toggleJoined: (slug: string) => setJoined((items) => (items.includes(slug) ? items.filter((item) => item !== slug) : [...items, slug])),
@@ -99,9 +113,21 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
       removeSpace: (slug: string) => {
         setCreatedSpaces((items) => items.filter((item) => item.slug !== slug))
         setSpaceAdmins((current) => { const next = { ...current }; delete next[slug]; return next })
+        setRemovedMembers((current) => { const next = { ...current }; delete next[slug]; return next })
         setJoined((items) => items.filter((item) => item !== slug))
         setFollowing((items) => items.filter((item) => item !== slug))
       },
+      // Admin-only. Adds the person to the space's removed list so they drop out of the roster and
+      // member count. The current parent is never removable this way (self-exit uses leaveSpace).
+      removeMember: (slug: string, name: string) => {
+        if (name === CURRENT_PARENT) return
+        setRemovedMembers((current) => {
+          const existing = current[slug] ?? []
+          if (existing.includes(name)) return current
+          return { ...current, [slug]: [...existing, name] }
+        })
+      },
+      getRemovedMembers: (slug: string) => removedMembers[slug] ?? [],
       // Leave/unfollow. Drops the current parent from the admin list (if present) and from
       // membership/following. When `transferTo` is provided (sole-admin case), that member/follower
       // is promoted to admin first so the space always retains at least one admin.
@@ -119,7 +145,7 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
       getAdmins: (slug: string) => spaceAdmins[slug] ?? [],
       getSpace: (slug: string) => spaces.find((space) => space.slug === slug),
     }
-  }, [joined, following, createdSpaces, spaceAdmins, hydrated])
+  }, [joined, following, createdSpaces, spaceAdmins, removedMembers, hydrated])
   return <SocialContext.Provider value={value}>{children}</SocialContext.Provider>
 }
 
