@@ -313,6 +313,17 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
       <InviteMembersDialog open={inviteOpen} onOpenChange={setInviteOpen} spaceTitle={record.title} invited={invited} onInvite={(ids) => setInvited((current) => Array.from(new Set([...current, ...ids])))} />
       <ViewAllMembersDialog open={membersOpen} onOpenChange={setMembersOpen} spaceTitle={record.title} memberNames={rosterNames} invitedContacts={invitedContacts.map((contact) => contact.name)} />
       {admin && <DeleteSpaceDialog open={deleteOpen} onOpenChange={setDeleteOpen} isGroup={isGroup} onConfirm={handleDelete} />}
+      {admin && (
+        <LeaveSpaceDialog
+          open={leaveOpen}
+          onOpenChange={setLeaveOpen}
+          isGroup={isGroup}
+          mustTransfer={mustTransferBeforeLeaving}
+          candidates={transferCandidates}
+          onTransferAndLeave={handleTransferAndLeave}
+          onDeleteInstead={() => { setLeaveOpen(false); setDeleteOpen(true) }}
+        />
+      )}
     </div>
   )
 }
@@ -332,6 +343,53 @@ function DeleteSpaceDialog({ open, onOpenChange, isGroup, onConfirm }: { open: b
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button variant="destructive" onClick={onConfirm}><Trash2 data-icon="inline-start" />{isGroup ? "Delete Group" : "Delete Community"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Shown only to a sole admin who wants to leave. If eligible members/followers exist, the admin
+// must transfer ownership to one of them and then leaves immediately as a normal member/follower.
+// If nobody else remains, leaving would orphan the space, so deletion is offered instead.
+function LeaveSpaceDialog({ open, onOpenChange, isGroup, mustTransfer, candidates, onTransferAndLeave, onDeleteInstead }: { open: boolean; onOpenChange: (open: boolean) => void; isGroup: boolean; mustTransfer: boolean; candidates: string[]; onTransferAndLeave: (newAdmin: string) => void; onDeleteInstead: () => void }) {
+  const [selected, setSelected] = useState<string | null>(null)
+  useEffect(() => { if (!open) setSelected(null) }, [open])
+  const leaveWord = isGroup ? "leave this group" : "unfollow this community"
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{mustTransfer ? "Transfer admin & leave" : isGroup ? "You’re the only admin" : "You’re the only admin"}</DialogTitle>
+          <DialogDescription>
+            {mustTransfer
+              ? `You’re the only admin of this ${isGroup ? "group" : "community"}. Choose a ${isGroup ? "member" : "follower"} to become the new admin. They’ll take over ownership and you’ll ${leaveWord} right away.`
+              : `You’re the only admin and there’s no one else to take over, so you can’t ${leaveWord} without leaving it ownerless. You can delete the ${isGroup ? "group" : "community"} instead.`}
+          </DialogDescription>
+        </DialogHeader>
+        {mustTransfer ? (
+          <ul className="max-h-72 space-y-1 overflow-y-auto">
+            {candidates.map((name) => {
+              const isSelected = selected === name
+              return (
+                <li key={name}>
+                  <button type="button" onClick={() => setSelected(name)} className={`flex w-full items-center gap-3 rounded-xl border p-2 text-left transition-colors ${isSelected ? "border-brand bg-brand-muted" : "border-transparent hover:bg-secondary"}`}>
+                    <Avatar className="size-10"><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(name)}</AvatarFallback></Avatar>
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{name}</span>
+                    <span className={`grid size-5 place-items-center rounded-full border ${isSelected ? "border-brand bg-brand text-brand-foreground" : "border-input"}`}>{isSelected && <Check className="size-3.5" />}</span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        ) : null}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          {mustTransfer ? (
+            <Button disabled={!selected} onClick={() => selected && onTransferAndLeave(selected)}><ShieldCheck data-icon="inline-start" />Transfer &amp; {isGroup ? "leave" : "unfollow"}</Button>
+          ) : (
+            <Button variant="destructive" onClick={onDeleteInstead}><Trash2 data-icon="inline-start" />{isGroup ? "Delete group" : "Delete community"}</Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
