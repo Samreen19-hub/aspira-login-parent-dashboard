@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ArrowLeft, Bell, BellOff, Check, Copy, Lock, LogOut, MoreHorizontal, Search, Settings, ShieldCheck, Trash2, UserPlus, Users } from "lucide-react"
+import { ArrowLeft, Bell, BellOff, Check, Copy, Lock, LogOut, MoreHorizontal, Search, Settings, ShieldCheck, Trash2, UserMinus, UserPlus, Users } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -25,7 +25,7 @@ function initialsOf(name: string) {
 }
 
 export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; slug: string }) {
-  const { getSpace, joined, toggleJoined, following, toggleFollowing, isAdmin, getAdmins, leaveSpace, removeSpace, hydrated } = useSocialStore()
+  const { getSpace, joined, toggleJoined, following, toggleFollowing, isAdmin, getAdmins, leaveSpace, removeSpace, removeMember, getRemovedMembers, hydrated } = useSocialStore()
   const { posts, addPost, removePost, removePostsByScope } = useFeedStore()
   const router = useRouter()
   const [invited, setInvited] = useState<string[]>([])
@@ -35,6 +35,8 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const [membersOpen, setMembersOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [leaveOpen, setLeaveOpen] = useState(false)
+  // Member the admin is about to remove (drives the confirmation dialog). Null when idle.
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [focusedId, setFocusedId] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -136,9 +138,12 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   }
 
   const invitedContacts = INVITE_CONTACTS.filter((contact) => invited.includes(contact.id))
-  const memberCount = record.members + (isMember ? 1 : 0) + invitedContacts.length
+  // Members/followers the admin has removed. Excluded from the roster and subtracted from the count.
+  const removedForSpace = getRemovedMembers(slug)
+  const otherMembers = otherMemberNames(record).filter((name) => !removedForSpace.includes(name))
+  const memberCount = record.members + (isMember ? 1 : 0) + invitedContacts.length - removedForSpace.length
   // Single source of truth: the current parent appears in the roster only while actually a member.
-  const rosterNames = isMember ? [CURRENT_PARENT, ...otherMemberNames(record)] : otherMemberNames(record)
+  const rosterNames = isMember ? [CURRENT_PARENT, ...otherMembers] : otherMembers
   const feedPosts = posts.filter((post) => post.scope === slug)
 
   // --- Admin leave rules --------------------------------------------------
@@ -146,9 +151,9 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   // least one admin still owns the space.
   const admins = getAdmins(slug)
   const otherAdmins = admins.filter((name) => name !== CURRENT_PARENT)
-  // Other members/followers who could inherit ownership (roster excluding the parent and anyone
-  // who is already an admin).
-  const transferCandidates = otherMemberNames(record).filter((name) => !admins.includes(name))
+  // Other members/followers who could inherit ownership (roster excluding the parent, anyone
+  // already an admin, and anyone the admin has removed).
+  const transferCandidates = otherMembers.filter((name) => !admins.includes(name))
   const isSoleAdmin = admin && otherAdmins.length === 0
   // Sole admin with other members/followers must hand off ownership before leaving. Sole admin
   // with nobody else cannot leave the space ownerless and is offered deletion instead.
@@ -188,6 +193,12 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
     leaveSpace(slug, newAdmin)
     setLeaveOpen(false)
     router.push(`/parent/${kind}`)
+  }
+
+  // Admin-only. Confirms removing the pending member/follower from the space.
+  function handleConfirmRemove() {
+    if (removeTarget) removeMember(slug, removeTarget)
+    setRemoveTarget(null)
   }
 
   return (
@@ -293,8 +304,9 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
                 </div>
               ))}
               <div className="mt-1 grid gap-2">
-                <Button variant="outline" className="w-full rounded-xl" onClick={() => setMembersOpen(true)}><Users data-icon="inline-start" />View all members</Button>
-                <Button className="w-full rounded-xl" onClick={() => setInviteOpen(true)}><UserPlus data-icon="inline-start" />Invite members</Button>
+                <Button variant="outline" className="w-full rounded-xl" onClick={() => setMembersOpen(true)}><Users data-icon="inline-start" />{admin ? "Manage members" : "View all members"}</Button>
+                {/* Inviting is an admin management control only. */}
+                {admin && <Button className="w-full rounded-xl" onClick={() => setInviteOpen(true)}><UserPlus data-icon="inline-start" />Invite members</Button>}
               </div>
             </CardContent>
           </Card>
@@ -311,27 +323,109 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
       </div>
 
       <InviteMembersDialog open={inviteOpen} onOpenChange={setInviteOpen} spaceTitle={record.title} invited={invited} onInvite={(ids) => setInvited((current) => Array.from(new Set([...current, ...ids])))} />
-      <ViewAllMembersDialog open={membersOpen} onOpenChange={setMembersOpen} spaceTitle={record.title} memberNames={rosterNames} invitedContacts={invitedContacts.map((contact) => contact.name)} />
-      {admin && <DeleteSpaceDialog open={deleteOpen} onOpenChange={setDeleteOpen} isGroup={isGroup} onConfirm={handleDelete} />}
+      <ViewAllMembersDialog open={membersOpen} onOpenChange={setMembersOpen} spaceTitle={record.title} memberNames={rosterNames} invitedContacts={invitedContacts.map((contact) => contact.name)} canManage={admin} onRequestRemove={(name) => setRemoveTarget(name)} />
+      {admin && <DeleteSpaceDialog open={deleteOpen} onOpenChange={setDeleteOpen} isGroup={isGroup} memberCount={memberCount} onConfirm={handleDelete} />}
+      {admin && <RemoveMemberDialog open={removeTarget !== null} onOpenChange={(value) => { if (!value) setRemoveTarget(null) }} isGroup={isGroup} memberName={removeTarget ?? ""} onConfirm={handleConfirmRemove} />}
+      {admin && (
+        <LeaveSpaceDialog
+          open={leaveOpen}
+          onOpenChange={setLeaveOpen}
+          isGroup={isGroup}
+          mustTransfer={mustTransferBeforeLeaving}
+          candidates={transferCandidates}
+          onTransferAndLeave={handleTransferAndLeave}
+          onDeleteInstead={() => { setLeaveOpen(false); setDeleteOpen(true) }}
+        />
+      )}
     </div>
   )
 }
 
-function DeleteSpaceDialog({ open, onOpenChange, isGroup, onConfirm }: { open: boolean; onOpenChange: (open: boolean) => void; isGroup: boolean; onConfirm: () => void }) {
+// Admin can delete a space even when it still has members — deletion is never blocked on emptying
+// the roster. The current member count is shown so the admin knows exactly what they're removing.
+function DeleteSpaceDialog({ open, onOpenChange, isGroup, memberCount, onConfirm }: { open: boolean; onOpenChange: (open: boolean) => void; isGroup: boolean; memberCount: number; onConfirm: () => void }) {
+  const memberLabel = `${memberCount} ${memberCount === 1 ? "member" : "members"}`
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{isGroup ? "Delete this group?" : "Delete this community?"}</DialogTitle>
+          <DialogTitle>{isGroup ? "Delete Group?" : "Delete Community?"}</DialogTitle>
           <DialogDescription>
             {isGroup
-              ? "This will permanently delete the group, its posts, events, and membership data. This action cannot be undone."
-              : "This will permanently delete the community, its posts, events, and follower data. This action cannot be undone."}
+              ? `This group has ${memberLabel}. Deleting this group will permanently remove the group, its posts, events, and membership information. This action cannot be undone.`
+              : `This community has ${memberLabel}. Deleting this community will permanently remove the community, its posts, events, and membership information. This action cannot be undone.`}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button variant="destructive" onClick={onConfirm}><Trash2 data-icon="inline-start" />{isGroup ? "Delete Group" : "Delete Community"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Admin-only confirmation before removing a member/follower from the space.
+function RemoveMemberDialog({ open, onOpenChange, isGroup, memberName, onConfirm }: { open: boolean; onOpenChange: (open: boolean) => void; isGroup: boolean; memberName: string; onConfirm: () => void }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Remove member?</DialogTitle>
+          <DialogDescription>
+            {memberName} will be removed from this {isGroup ? "group" : "community"} and will no longer have access to member-only content.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="destructive" onClick={onConfirm}><UserMinus data-icon="inline-start" />Remove Member</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Shown only to a sole admin who wants to leave. If eligible members/followers exist, the admin
+// must transfer ownership to one of them and then leaves immediately as a normal member/follower.
+// If nobody else remains, leaving would orphan the space, so deletion is offered instead.
+function LeaveSpaceDialog({ open, onOpenChange, isGroup, mustTransfer, candidates, onTransferAndLeave, onDeleteInstead }: { open: boolean; onOpenChange: (open: boolean) => void; isGroup: boolean; mustTransfer: boolean; candidates: string[]; onTransferAndLeave: (newAdmin: string) => void; onDeleteInstead: () => void }) {
+  const [selected, setSelected] = useState<string | null>(null)
+  useEffect(() => { if (!open) setSelected(null) }, [open])
+  const leaveWord = isGroup ? "leave this group" : "unfollow this community"
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{mustTransfer ? "Transfer admin & leave" : isGroup ? "You’re the only admin" : "You’re the only admin"}</DialogTitle>
+          <DialogDescription>
+            {mustTransfer
+              ? `You’re the only admin of this ${isGroup ? "group" : "community"}. Choose a ${isGroup ? "member" : "follower"} to become the new admin. They’ll take over ownership and you’ll ${leaveWord} right away.`
+              : `You’re the only admin and there’s no one else to take over, so you can’t ${leaveWord} without leaving it ownerless. You can delete the ${isGroup ? "group" : "community"} instead.`}
+          </DialogDescription>
+        </DialogHeader>
+        {mustTransfer ? (
+          <ul className="max-h-72 space-y-1 overflow-y-auto">
+            {candidates.map((name) => {
+              const isSelected = selected === name
+              return (
+                <li key={name}>
+                  <button type="button" onClick={() => setSelected(name)} className={`flex w-full items-center gap-3 rounded-xl border p-2 text-left transition-colors ${isSelected ? "border-brand bg-brand-muted" : "border-transparent hover:bg-secondary"}`}>
+                    <Avatar className="size-10"><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(name)}</AvatarFallback></Avatar>
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{name}</span>
+                    <span className={`grid size-5 place-items-center rounded-full border ${isSelected ? "border-brand bg-brand text-brand-foreground" : "border-input"}`}>{isSelected && <Check className="size-3.5" />}</span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        ) : null}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          {mustTransfer ? (
+            <Button disabled={!selected} onClick={() => selected && onTransferAndLeave(selected)}><ShieldCheck data-icon="inline-start" />Transfer &amp; {isGroup ? "leave" : "unfollow"}</Button>
+          ) : (
+            <Button variant="destructive" onClick={onDeleteInstead}><Trash2 data-icon="inline-start" />{isGroup ? "Delete group" : "Delete community"}</Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -376,24 +470,33 @@ function InviteMembersDialog({ open, onOpenChange, spaceTitle, invited, onInvite
   )
 }
 
-function ViewAllMembersDialog({ open, onOpenChange, spaceTitle, memberNames, invitedContacts }: { open: boolean; onOpenChange: (open: boolean) => void; spaceTitle: string; memberNames: string[]; invitedContacts: string[] }) {
+// When `canManage` is set (admin), each other member/follower gets a Remove action. The current
+// parent (always first, badged "You") can never be removed here — self-exit uses Leave/Unfollow.
+function ViewAllMembersDialog({ open, onOpenChange, spaceTitle, memberNames, invitedContacts, canManage, onRequestRemove }: { open: boolean; onOpenChange: (open: boolean) => void; spaceTitle: string; memberNames: string[]; invitedContacts: string[]; canManage?: boolean; onRequestRemove?: (name: string) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Members of {spaceTitle}</DialogTitle>
-          <DialogDescription>Everyone in this space.</DialogDescription>
+          <DialogDescription>{canManage ? "Manage who has access to this space." : "Everyone in this space."}</DialogDescription>
         </DialogHeader>
         <ul className="max-h-80 space-y-1 overflow-y-auto">
-          {memberNames.map((name, index) => (
-            <li key={name} className="flex items-center justify-between gap-3 rounded-xl p-2">
-              <div className="flex items-center gap-3">
-                <Avatar className="size-9"><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(name)}</AvatarFallback></Avatar>
-                <span className="text-sm font-medium">{name}</span>
-              </div>
-              {index === 0 && <Badge variant="secondary">You</Badge>}
-            </li>
-          ))}
+          {memberNames.map((name, index) => {
+            const isSelf = name === CURRENT_PARENT
+            return (
+              <li key={name} className="flex items-center justify-between gap-3 rounded-xl p-2">
+                <div className="flex min-w-0 items-center gap-3">
+                  <Avatar className="size-9"><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(name)}</AvatarFallback></Avatar>
+                  <span className="truncate text-sm font-medium">{name}</span>
+                </div>
+                {index === 0 && isSelf ? (
+                  <Badge variant="secondary">You</Badge>
+                ) : canManage && !isSelf ? (
+                  <Button variant="ghost" size="sm" className="h-8 shrink-0 rounded-lg text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => onRequestRemove?.(name)}><UserMinus data-icon="inline-start" />Remove</Button>
+                ) : null}
+              </li>
+            )
+          })}
           {invitedContacts.map((name) => (
             <li key={name} className="flex items-center justify-between gap-3 rounded-xl p-2">
               <div className="flex items-center gap-3">
