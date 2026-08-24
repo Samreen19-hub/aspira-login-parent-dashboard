@@ -109,18 +109,19 @@ export function TimetableView() {
 
   return (
     <div className="mx-auto max-w-6xl">
-      {/* Back navigation — same pattern as the Groups/Communities detail pages. */}
-      <Link
-        href="/parent"
-        className="mb-5 inline-flex w-fit items-center gap-2 text-sm font-medium text-brand hover:underline"
-      >
-        <ArrowLeft className="size-4" />
-        Back to Home
-      </Link>
-
-      {/* Heading */}
+      {/* Heading — back arrow reuses the exact Groups/Communities back-navigation pattern
+          (Link + ArrowLeft size-4 + text-brand hover:underline), arrow only. */}
       <div className="mb-6">
-        <h1 className="font-display text-3xl font-bold text-foreground text-balance">Timetable</h1>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/parent"
+            aria-label="Back"
+            className="inline-flex w-fit items-center gap-2 text-sm font-medium text-brand hover:underline"
+          >
+            <ArrowLeft className="size-4" />
+          </Link>
+          <h1 className="font-display text-3xl font-bold text-foreground text-balance">Timetable</h1>
+        </div>
         <p className="mt-1 text-sm text-muted-foreground">A clear view of your children&apos;s school week.</p>
       </div>
 
