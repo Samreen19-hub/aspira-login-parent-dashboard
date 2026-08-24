@@ -6,7 +6,8 @@ import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ProgressRing } from '@/components/parent/progress-ring'
-import { CHILDREN, UPCOMING_EVENTS, SCHOOL_NOTIFICATIONS } from '@/lib/parent-data'
+import { useChildrenStore } from '@/components/parent/children-store'
+import { UPCOMING_EVENTS, SCHOOL_NOTIFICATIONS } from '@/lib/parent-data'
 import { cn } from '@/lib/utils'
 
 const EVENT_ICON = {
@@ -27,13 +28,17 @@ function SectionHeader({ title, href }: { title: string; href: string }) {
 }
 
 export function RightSidebar() {
+  // Same persisted source of truth used by My Children and the Timetable selector, so a newly
+  // added child shows up here immediately (and after navigation/refresh) with no separate list.
+  const { children } = useChildrenStore()
+
   return (
     <aside className="flex flex-col gap-4">
       {/* My Children */}
       <Card className="p-5">
         <SectionHeader title="My Children" href="/parent/children" />
         <div className="grid gap-3">
-          {CHILDREN.map((child) => (
+          {children.map((child) => (
             <Link
               key={child.id}
               href={`/parent/children`}
