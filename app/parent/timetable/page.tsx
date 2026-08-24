@@ -1,2 +1,5 @@
-import { SectionMock } from "@/components/parent/section-mock"
-export default function TimetablePage() { return <SectionMock kind="timetable" /> }
+import { TimetableView } from "@/components/parent/timetable-view"
+
+export default function TimetablePage() {
+  return <TimetableView />
+}
