@@ -1,8 +1,10 @@
 "use client"
 
 import { useMemo, useState } from "react"
+import Link from "next/link"
 import useSWR from "swr"
 import {
+  ArrowLeft,
   CalendarDays,
   ChevronDown,
   ChevronLeft,
@@ -21,7 +23,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { CHILDREN } from "@/lib/parent-data"
+import { useChildrenStore } from "@/components/parent/children-store"
 import {
   WEEKDAYS,
   dateForWeekday,
@@ -63,11 +65,16 @@ function schoolHours(entries: TimetableEntry[]): string {
 /* -------------------------------------------------------------------------- */
 
 export function TimetableView() {
-  const [childId, setChildId] = useState(CHILDREN[0]?.id ?? "")
+  // Children come from the shared, persisted store so newly added children appear here too.
+  const { children } = useChildrenStore()
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   // Track the Monday of the visible week; navigation shifts it by ±7 days.
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
 
-  const activeChild = CHILDREN.find((child) => child.id === childId) ?? CHILDREN[0]
+  // Fall back to the first child until one is picked, and recover gracefully if the selected
+  // child is no longer in the roster.
+  const activeChild = children.find((child) => child.id === selectedId) ?? children[0]
+  const childId = activeChild?.id ?? ""
   const key = weekKey(weekStart)
 
   const { data, isLoading } = useSWR(
@@ -102,6 +109,15 @@ export function TimetableView() {
 
   return (
     <div className="mx-auto max-w-6xl">
+      {/* Back navigation — same pattern as the Groups/Communities detail pages. */}
+      <Link
+        href="/parent"
+        className="mb-5 inline-flex w-fit items-center gap-2 text-sm font-medium text-brand hover:underline"
+      >
+        <ArrowLeft className="size-4" />
+        Back to Home
+      </Link>
+
       {/* Heading */}
       <div className="mb-6">
         <h1 className="font-display text-3xl font-bold text-foreground text-balance">Timetable</h1>
@@ -126,10 +142,10 @@ export function TimetableView() {
             }
           />
           <DropdownMenuContent className="w-64">
-            {CHILDREN.map((child) => (
+            {children.map((child) => (
               <DropdownMenuItem
                 key={child.id}
-                onClick={() => setChildId(child.id)}
+                onClick={() => setSelectedId(child.id)}
                 className="gap-2.5 py-2"
               >
                 <Avatar className="size-7">

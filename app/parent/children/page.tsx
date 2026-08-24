@@ -11,10 +11,10 @@ import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { PageShell } from "@/components/parent/page-shell"
 import { ProgressRing } from "@/components/parent/progress-ring"
-import { CHILDREN, type Child } from "@/lib/parent-data"
+import { useChildrenStore } from "@/components/parent/children-store"
 
 export default function ChildrenPage() {
-  const [children, setChildren] = useState<Child[]>(CHILDREN)
+  const { children, addChild: persistChild } = useChildrenStore()
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState({ name: "", dob: "", className: "", school: "", relationship: "Child" })
 
@@ -24,11 +24,11 @@ export default function ChildrenPage() {
 
   function addChild() {
     if (!form.name.trim() || !form.className.trim() || !form.school.trim()) return
-    setChildren((current) => [...current, {
+    persistChild({
       id: `child-${Date.now()}`,
       name: form.name.trim(), className: form.className.trim(), school: form.school.trim(),
       avatar: "/placeholder.svg", progress: 0,
-    }])
+    })
     setForm({ name: "", dob: "", className: "", school: "", relationship: "Child" })
     setOpen(false)
   }
