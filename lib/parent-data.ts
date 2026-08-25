@@ -11,6 +11,10 @@ export interface Child {
   avatar: string
   progress: number
   online?: boolean
+  /** Optional date of birth (YYYY-MM-DD), captured in the add/edit child flow. */
+  dob?: string
+  /** Optional relationship to the parent, e.g. "Child", "Guardian". */
+  relationship?: string
 }
 
 export interface FeedComment {
