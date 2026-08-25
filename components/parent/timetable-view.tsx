@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react"
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
 import useSWR from "swr"
 import {
   ArrowLeft,
@@ -67,12 +68,17 @@ function schoolHours(entries: TimetableEntry[]): string {
 export function TimetableView() {
   // Children come from the shared, persisted store so newly added children appear here too.
   const { children } = useChildrenStore()
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // When navigating in from a specific child (e.g. My Children → Timetable), that child's id
+  // arrives as `?childId=`. Seed the initial selection from it so the page opens on that child
+  // instead of always defaulting to the first one. Manual selection still overrides it afterwards.
+  const searchParams = useSearchParams()
+  const initialChildId = searchParams.get("childId")
+  const [selectedId, setSelectedId] = useState<string | null>(initialChildId)
   // Track the Monday of the visible week; navigation shifts it by ±7 days.
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
 
-  // Fall back to the first child until one is picked, and recover gracefully if the selected
-  // child is no longer in the roster.
+  // Resolve the selected child; fall back to the first child when nothing is selected or the
+  // selected/param id is not a valid child in the roster.
   const activeChild = children.find((child) => child.id === selectedId) ?? children[0]
   const childId = activeChild?.id ?? ""
   const key = weekKey(weekStart)

@@ -11,6 +11,10 @@ export interface Child {
   avatar: string
   progress: number
   online?: boolean
+  /** Optional date of birth (YYYY-MM-DD), captured in the add/edit child flow. */
+  dob?: string
+  /** Optional relationship to the parent, e.g. "Child", "Guardian". */
+  relationship?: string
 }
 
 export interface FeedComment {
@@ -23,6 +27,35 @@ export interface FeedComment {
 }
 
 export type FeedPostType = 'text' | 'photo' | 'achievement' | 'poll' | 'event'
+
+/**
+ * Where an event originates / who can see it. Drives the Events tab source label and, together
+ * with the live membership state (joined groups / followed communities), its visibility.
+ * - school: created by the school/admin, always visible to parents (never parent-editable)
+ * - group / community: belongs to a space (post.scope = slug); visible only to members/followers
+ * - connections: a parent-created event shared with their connections
+ * - private: a parent-created event visible only to the creator ("Only Me")
+ */
+export type EventSource = 'school' | 'group' | 'community' | 'connections' | 'private'
+
+export interface EventDetails {
+  title: string
+  /** Human display date, e.g. "12 Sep 2026". */
+  date: string
+  /** Start time display, e.g. "08:00 AM". */
+  time: string
+  location: string
+  description: string
+  /** Machine date (YYYY-MM-DD) used for sorting and upcoming/past classification. */
+  isoDate?: string
+  /** End time display, e.g. "10:00 AM". */
+  endTime?: string
+  source?: EventSource
+  /** Who is hosting, e.g. a school name, a space name, or the parent's name. */
+  organizer?: string
+  /** Optional cover image URL. */
+  cover?: string
+}
 
 export interface FeedPost {
   id: string
@@ -42,7 +75,7 @@ export interface FeedPost {
   likedByLabel: string
   achievement?: { title: string; child: string; description: string }
   poll?: { question: string; options: string[]; votes: number[]; voted?: number }
-  event?: { title: string; date: string; time: string; location: string; description: string }
+  event?: EventDetails
   /** When set, this post belongs to a specific group/community feed (by slug) and is kept out of the Home Feed. */
   scope?: string
 }
