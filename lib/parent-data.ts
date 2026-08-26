@@ -382,34 +382,102 @@ function seedPostsForSpace(space: SocialSpace): FeedPost[] {
     ],
     scope: space.slug,
   }
-  const event: FeedPost = {
-    id: `${space.slug}-seed-event`,
-    type: 'event',
-    author: space.memberNames[0] === 'Rashi Kapoor' ? memberAuthor : space.memberNames[0],
-    role: isGroup ? 'Member' : 'Community',
-    subtitle: `Organiser · ${space.title}`,
-    time: '1d ago',
-    visibility: isGroup ? 'Group' : 'Community',
-    avatar: '/avatar-aarav.png',
-    body: '',
-    hashtags: [],
-    likes: 26,
-    shares: 6,
-    likedByLabel: 'Neha Sharma and 25 others',
-    comments: [],
-    event: {
-      title: isGroup ? `${space.title} Meetup` : `${space.title} Open House`,
-      date: '14 Jun 2025',
-      time: '05:00 PM',
-      location: 'Greenfield Public School, Auditorium',
-      description: `Join fellow families from ${space.title} for a relaxed get-together. Snacks, introductions, and plenty of conversation.`,
-    },
-    scope: space.slug,
-  }
-  return [welcome, event]
+  return [welcome]
 }
 
 export const SPACE_FEED_POSTS: FeedPost[] = SOCIAL_SPACES.flatMap(seedPostsForSpace)
+
+/**
+ * Helper to build an event FeedPost with a consistent shape. Events live in the same feed store as
+ * every other post; `scope` links a group/community event back to its space (the single source of
+ * truth for membership-based visibility), and `event.source` drives the Events tab source label.
+ */
+function makeEvent(config: {
+  id: string
+  author: string
+  avatar: string
+  role: string
+  source: EventSource
+  organizer: string
+  scope?: string
+  title: string
+  isoDate: string
+  time: string
+  endTime: string
+  location: string
+  description: string
+  cover?: string
+  likes?: number
+  shares?: number
+}): FeedPost {
+  return {
+    id: config.id,
+    type: 'event',
+    author: config.author,
+    role: config.role,
+    subtitle: `${config.organizer}`,
+    time: 'Scheduled',
+    visibility: config.source === 'private' ? 'Only me' : config.source === 'school' ? 'School' : config.source === 'group' ? 'Group' : config.source === 'community' ? 'Community' : 'Connections',
+    avatar: config.avatar,
+    body: '',
+    hashtags: [],
+    likes: config.likes ?? 0,
+    shares: config.shares ?? 0,
+    likedByLabel: config.likes ? `${config.likes} interested` : 'Be the first to show interest',
+    comments: [],
+    event: {
+      title: config.title,
+      date: displayDate(config.isoDate),
+      isoDate: config.isoDate,
+      time: config.time,
+      endTime: config.endTime,
+      location: config.location,
+      description: config.description,
+      source: config.source,
+      organizer: config.organizer,
+      cover: config.cover,
+    },
+    scope: config.scope,
+  }
+}
+
+/** Formats an ISO date (YYYY-MM-DD) into a short human display like "12 Sep 2026". */
+function displayDate(iso: string) {
+  return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${iso}T12:00:00`))
+}
+
+const SCHOOL = 'Greenfield Public School'
+
+/**
+ * Seed events covering every supported source. School events are always visible; group/community
+ * events are scoped to a space and only surface once the parent has joined/followed it. Rashi's own
+ * events are always visible. Dates are a mix of upcoming and past to exercise both sections.
+ * IMPORTANT: this does NOT change Rashi's membership — that is owned entirely by the social store.
+ */
+export const SEED_EVENTS: FeedPost[] = [
+  // --- School events (source: school, always visible, never parent-editable) ---
+  makeEvent({ id: 'evt-sports-day', author: SCHOOL, avatar: '/avatar-saanvi.png', role: 'School', source: 'school', organizer: SCHOOL, title: 'Annual Sports Day', isoDate: '2026-09-12', time: '08:00 AM', endTime: '01:00 PM', location: 'Greenfield International School', description: 'Track and field events, team games, and the inter-house championship. Families are welcome to cheer on their children throughout the day.', likes: 96, shares: 14 }),
+  makeEvent({ id: 'evt-ptm', author: SCHOOL, avatar: '/avatar-saanvi.png', role: 'School', source: 'school', organizer: SCHOOL, title: 'Parent-Teacher Meeting', isoDate: '2026-09-20', time: '10:00 AM', endTime: '12:30 PM', location: 'Greenfield Public School', description: 'Meet your child’s class teachers to discuss academic progress, upcoming assessments, and how to support learning at home.', likes: 58, shares: 6 }),
+  makeEvent({ id: 'evt-science-expo', author: SCHOOL, avatar: '/avatar-saanvi.png', role: 'School', source: 'school', organizer: SCHOOL, title: 'Science Exhibition', isoDate: '2026-10-05', time: '11:00 AM', endTime: '03:00 PM', location: 'School Auditorium', description: 'Students present their science projects and experiments. Come explore the ideas your children have been building all term.', likes: 71, shares: 9 }),
+  makeEvent({ id: 'evt-cultural-fest', author: SCHOOL, avatar: '/avatar-saanvi.png', role: 'School', source: 'school', organizer: SCHOOL, title: 'School Cultural Fest', isoDate: '2026-05-10', time: '05:00 PM', endTime: '08:00 PM', location: 'Greenfield International School', description: 'An evening of music, dance, and drama performances by students across all grades.', likes: 132, shares: 21 }),
+
+  // --- Group events (source: group, visible only to members of that group) ---
+  makeEvent({ id: 'evt-c6-picnic', author: 'Priya Sharma', avatar: '/avatar-aarav.png', role: 'Member', source: 'group', organizer: 'Class 6 Parents', scope: 'class-6-parents', title: 'Class 6 Parents Picnic', isoDate: '2026-09-15', time: '09:00 AM', endTime: '01:00 PM', location: 'Riverside City Park', description: 'A relaxed weekend picnic for Class 6 families. Bring a dish to share and get to know other parents from the class.', likes: 22, shares: 4 }),
+  makeEvent({ id: 'evt-study-discussion', author: 'Shalini Rao', avatar: '/avatar-aarav.png', role: 'Member', source: 'group', organizer: 'Weekend Learning Circle', scope: 'weekend-learning-circle', title: 'Parent Study Discussion', isoDate: '2026-09-18', time: '05:00 PM', endTime: '06:30 PM', location: 'Online', description: 'A weekly discussion on effective home-study routines and sharing resources that have worked for our families.', likes: 12, shares: 2 }),
+
+  // --- Community events (source: community, visible only to followers of that community) ---
+  makeEvent({ id: 'evt-career-guidance', author: 'Aditya Rao', avatar: '/avatar-aarav.png', role: 'Community', source: 'community', organizer: 'Young Scientists', scope: 'young-scientists', title: 'Career Guidance Session', isoDate: '2026-09-22', time: '04:00 PM', endTime: '05:30 PM', location: 'Online', description: 'Industry mentors talk to students and parents about STEM career paths and how to nurture curiosity at home.', likes: 34, shares: 7 }),
+  makeEvent({ id: 'evt-parenting-workshop', author: 'Leela Menon', avatar: '/avatar-aarav.png', role: 'Community', source: 'community', organizer: 'Family Wellness', scope: 'family-wellness', title: 'Parenting Workshop', isoDate: '2026-09-28', time: '03:00 PM', endTime: '04:30 PM', location: 'Community Hall, Sector 12', description: 'A hands-on workshop on positive parenting, screen-time balance, and building healthy routines for the whole family.', likes: 41, shares: 8 }),
+
+  // --- Rashi's own events (always visible, editable/deletable by her) ---
+  makeEvent({ id: 'evt-my-study-group', author: CURRENT_PARENT, avatar: '/avatar-rashi.png', role: 'Parent', source: 'connections', organizer: CURRENT_PARENT, title: 'Weekend Robotics Study Group', isoDate: '2026-09-10', time: '04:00 PM', endTime: '06:00 PM', location: 'Home · 14 Maple Residency', description: 'Inviting a few families for a small robotics practice session ahead of the next championship. Kids and parents welcome.', likes: 5, shares: 1 }),
+  makeEvent({ id: 'evt-my-past-meetup', author: CURRENT_PARENT, avatar: '/avatar-rashi.png', role: 'Parent', source: 'connections', organizer: CURRENT_PARENT, title: 'Class Coffee Catch-up', isoDate: '2026-06-14', time: '10:00 AM', endTime: '11:30 AM', location: 'Bloom Cafe', description: 'A casual morning coffee with a few parents from Aarav’s class.', likes: 8, shares: 0 }),
+]
+
+/** Default RSVP seed so the "I'm Attending / Interested" section is demonstrable on a fresh device. */
+export const DEFAULT_RSVP: Record<string, 'going' | 'interested'> = {
+  'evt-sports-day': 'interested',
+}
 
 /** Contact pool used by the "Invite members" flow. */
 export const INVITE_CONTACTS: InviteContact[] = [
