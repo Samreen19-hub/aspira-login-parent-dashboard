@@ -7,7 +7,9 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ProgressRing } from '@/components/parent/progress-ring'
 import { useChildrenStore } from '@/components/parent/children-store'
-import { UPCOMING_EVENTS, SCHOOL_NOTIFICATIONS } from '@/lib/parent-data'
+import { useSchoolUpdatesStore } from '@/components/parent/school-updates-store'
+import { UPCOMING_EVENTS } from '@/lib/parent-data'
+import { formatUpdateDate } from '@/lib/school-updates'
 import { cn } from '@/lib/utils'
 
 const EVENT_ICON = {
@@ -31,6 +33,10 @@ export function RightSidebar() {
   // Same persisted source of truth used by My Children and the Timetable selector, so a newly
   // added child shows up here immediately (and after navigation/refresh) with no separate list.
   const { children } = useChildrenStore()
+  // The School Notifications preview reads the SAME published School Updates data as the full page,
+  // scoped to the child's school. Newest first; only a short preview is shown here.
+  const { updates, isRead } = useSchoolUpdatesStore()
+  const notificationPreview = updates.slice(0, 3)
 
   return (
     <aside className="flex flex-col gap-4">
@@ -104,23 +110,23 @@ export function RightSidebar() {
 
       {/* School Notifications */}
       <Card className="p-5">
-        <SectionHeader title="School Notifications" href="/parent/notifications" />
+        <SectionHeader title="School Notifications" href="/parent/school-updates" />
         <div className="grid gap-3">
-          {SCHOOL_NOTIFICATIONS.map((n) => (
+          {notificationPreview.map((n) => (
             <div key={n.id} className="flex items-start gap-3">
               <span className="flex size-9 items-center justify-center rounded-lg bg-brand-muted text-brand">
                 <FileText className="size-4" />
               </span>
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-foreground">{n.title}</p>
-                <p className="text-xs text-muted-foreground">{n.time}</p>
+                <p className="text-xs text-muted-foreground">{formatUpdateDate(n.publishedAt)}</p>
               </div>
-              {n.unread && <span className="mt-1.5 size-2 shrink-0 rounded-full bg-brand" />}
+              {!isRead(n.id) && <span className="mt-1.5 size-2 shrink-0 rounded-full bg-brand" />}
             </div>
           ))}
         </div>
         <Button
-          render={<Link href="/parent/notifications" />}
+          render={<Link href="/parent/school-updates" />}
           variant="outline"
           className="mt-4 w-full rounded-xl text-brand"
         >

@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import Image from 'next/image'
-import { Users, CalendarDays, UsersRound, Globe, Bookmark, ArrowRight } from 'lucide-react'
+import { Users, CalendarDays, UsersRound, Globe, Bookmark, ArrowRight, Megaphone, CalendarHeart } from 'lucide-react'
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -14,6 +14,8 @@ import { cn } from '@/lib/utils'
 
 const QUICK_ACTIONS = [
   { label: 'My Children', href: '/parent/children', icon: Users },
+  { label: 'School Updates', href: '/parent/school-updates', icon: Megaphone },
+  { label: 'Events', href: '/parent/events', icon: CalendarHeart },
   { label: 'Timetable', href: '/parent/timetable', icon: CalendarDays },
   { label: 'Groups', href: '/parent/groups', icon: UsersRound },
   { label: 'Communities', href: '/parent/communities', icon: Globe },
