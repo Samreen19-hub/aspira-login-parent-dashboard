@@ -1,17 +1,19 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { CalendarPlus, CalendarX2, Search } from "lucide-react"
-import { Input } from "@/components/ui/input"
+import Link from "next/link"
+import { CalendarX2, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { useFeedStore, draftToPost, type RsvpState } from "@/components/parent/feed-store"
 import { useSocialStore } from "@/components/parent/social-store"
 import { PostComposer, type Draft, type EventDestination } from "@/components/parent/post-composer"
 import { EventCard } from "@/components/parent/event-card"
 import { EventDetailsDialog } from "@/components/parent/event-details-dialog"
 import { toEventView, type EventView, type Membership } from "@/lib/events"
-import { CURRENT_PARENT, type EventDetails, type EventSource, type FeedPost } from "@/lib/parent-data"
+import { CURRENT_PARENT, type EventDetails, type EventSource } from "@/lib/parent-data"
+import { cn } from "@/lib/utils"
 
 type FilterKey = "all" | "school" | "group" | "community" | "mine"
 
@@ -23,13 +25,17 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "mine", label: "My events" },
 ]
 
-function matchesFilter(event: EventView, filter: FilterKey) {
-  if (filter === "all") return true
-  if (filter === "mine") return event.isMine
-  if (filter === "group") return event.source === "group"
-  if (filter === "community") return event.source === "community"
-  if (filter === "school") return event.source === "school"
-  return true
+/** Splits a list into upcoming (nearest first) and past (most recent first). */
+function splitByTime(list: EventView[]) {
+  const upcoming = list.filter((e) => !e.isPast).sort((a, b) => a.start.getTime() - b.start.getTime())
+  const past = list.filter((e) => e.isPast).sort((a, b) => b.start.getTime() - a.start.getTime())
+  return { upcoming, past }
+}
+
+/** Orders a list upcoming-first (nearest date), then past events (most recent first). */
+function orderByTime(list: EventView[]) {
+  const { upcoming, past } = splitByTime(list)
+  return [...upcoming, ...past]
 }
 
 export function EventsView() {
@@ -41,22 +47,22 @@ export function EventsView() {
   const [openId, setOpenId] = useState<string | null>(null)
   const [status, setStatus] = useState("")
   const statusTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const openComposer = useRef<() => void>(() => {})
 
-  // Transient inline confirmation (announced to screen readers). Auto-clears after a few seconds.
   function notify(message: string) {
     setStatus(message)
     if (statusTimer.current) clearTimeout(statusTimer.current)
-    statusTimer.current = setTimeout(() => setStatus(""), 3500)
+    statusTimer.current = setTimeout(() => setStatus(""), 3200)
   }
   useEffect(() => () => { if (statusTimer.current) clearTimeout(statusTimer.current) }, [])
 
+  // Live membership is the single source of truth for group/community visibility.
   const membership = useMemo<Membership>(
     () => ({ joined: social.joined, following: social.following, isAdmin: social.isAdmin, getSpace: social.getSpace }),
     [social.joined, social.following, social.isAdmin, social.getSpace],
   )
 
-  // Recompute the visible event set whenever posts or membership change. Membership is the single
-  // source of truth for who sees group/community events, so joining a space reveals its events here.
+  // Every event post the current parent can access, resolved to a view model.
   const events = useMemo(() => {
     const now = new Date()
     return posts
@@ -64,169 +70,300 @@ export function EventsView() {
       .filter((view): view is EventView => view !== null)
   }, [posts, membership])
 
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    return events.filter((event) => {
-      if (!matchesFilter(event, filter)) return false
+  const needle = query.trim().toLowerCase()
+  const matchesQuery = useMemo(() => {
+    return (event: EventView) => {
       if (!needle) return true
-      return [event.title, event.location, event.organizer, event.spaceTitle ?? ""].some((field) => field.toLowerCase().includes(needle))
+      return [event.title, event.location, event.organizer, event.spaceTitle ?? ""].some((field) =>
+        field.toLowerCase().includes(needle),
+      )
+    }
+  }, [needle])
+
+  // Standard (source-based) filtering used by every tab except "My events".
+  const filtered = useMemo(() => {
+    return events.filter((event) => {
+      if (filter === "school") return event.source === "school" && matchesQuery(event)
+      if (filter === "group") return event.source === "group" && matchesQuery(event)
+      if (filter === "community") return event.source === "community" && matchesQuery(event)
+      if (filter === "mine") return false
+      return matchesQuery(event)
     })
-  }, [events, filter, query])
+  }, [events, filter, matchesQuery])
 
-  const upcoming = useMemo(() => filtered.filter((event) => !event.isPast).sort((a, b) => a.start.getTime() - b.start.getTime()), [filtered])
-  const past = useMemo(() => filtered.filter((event) => event.isPast).sort((a, b) => b.start.getTime() - a.start.getTime()), [filtered])
+  const { upcoming, past } = useMemo(() => splitByTime(filtered), [filtered])
 
-  // Destinations offered when creating an event: personal, plus every group the parent has joined
-  // and every community they follow (these are the only places a parent may post an event).
+  // My events splits into what Rashi created vs. events she's attending / interested in.
+  const mineCreated = useMemo(() => events.filter((e) => e.isMine && matchesQuery(e)), [events, matchesQuery])
+  const mineAttending = useMemo(
+    () => events.filter((e) => !e.isMine && rsvp[e.id] && matchesQuery(e)),
+    [events, rsvp, matchesQuery],
+  )
+
+  // Where a new event can be shared: connections, any joined group, any followed community, or private.
   const destinations = useMemo<EventDestination[]>(() => {
     const list: EventDestination[] = [{ value: "connections", label: "My connections" }]
-    for (const slug of social.joined) {
+    social.joined.forEach((slug) => {
       const space = social.getSpace(slug)
-      if (space) list.push({ value: `group:${slug}`, label: space.title, group: "Group" })
-    }
-    for (const slug of social.following) {
+      if (space) list.push({ value: `group:${slug}`, label: `Group · ${space.title}` })
+    })
+    social.following.forEach((slug) => {
       const space = social.getSpace(slug)
-      if (space) list.push({ value: `community:${slug}`, label: space.title, group: "Community" })
-    }
+      if (space) list.push({ value: `community:${slug}`, label: `Community · ${space.title}` })
+    })
+    list.push({ value: "private", label: "Only me" })
     return list
   }, [social.joined, social.following, social.getSpace])
 
-  const openEvent = openId ? events.find((event) => event.id === openId) ?? null : null
-  const openPost = openId ? posts.find((post) => post.id === openId) : undefined
+  const activeView = openId ? events.find((e) => e.id === openId) ?? null : null
+  const activeDetail = openId ? posts.find((p) => p.id === openId)?.event : undefined
 
   function handleCreate(draft: Draft) {
-    if (draft.type !== "event" || !draft.event) return
-    const destination = draft.event.destination ?? "connections"
-    const [kind, slug] = destination.includes(":") ? destination.split(":") : ["connections", undefined]
-    const source: EventSource = kind === "group" ? "group" : kind === "community" ? "community" : "connections"
-    const space = slug ? social.getSpace(slug) : undefined
-    const post = draftToPost(draft, {
-      author: CURRENT_PARENT,
-      role: "Parent",
-      subtitle: space ? space.title : "My event",
-      avatar: "/avatar-rashi.png",
-      scope: slug,
-      eventSource: source,
-      eventOrganizer: space ? space.title : CURRENT_PARENT,
-    })
-    addPost(post)
-    notify(`Event created: “${draft.event.title}” is now on your events.`)
-  }
-
-  function share(event: EventView) {
-    const text = `${event.title} · ${event.dateLabel} ${event.timeLabel} · ${event.location}`
-    if (typeof navigator !== "undefined" && navigator.clipboard) {
-      navigator.clipboard.writeText(text).catch(() => {})
+    const destination = draft.event?.destination ?? "connections"
+    let source: EventSource = "connections"
+    let slug: string | undefined
+    if (destination === "private") {
+      source = "private"
+    } else if (destination.includes(":")) {
+      const [kind, spaceSlug] = destination.split(":")
+      slug = spaceSlug
+      source = kind === "group" ? "group" : kind === "community" ? "community" : "connections"
     }
-    notify("Event details copied to your clipboard.")
+    const space = slug ? social.getSpace(slug) : undefined
+    const organizer = space ? space.title : CURRENT_PARENT
+    const subtitle = space ? space.title : source === "private" ? "Private event" : "Shared with connections"
+    addPost(
+      draftToPost(draft, {
+        author: CURRENT_PARENT,
+        role: "Parent",
+        subtitle,
+        avatar: "/avatar-rashi.png",
+        scope: slug,
+        eventSource: source,
+        eventOrganizer: organizer,
+      }),
+    )
+    notify("Event created")
   }
 
-  function toggleInterested(event: EventView) {
-    const current = rsvp[event.id]
-    const next = current ? null : "interested"
-    setRsvp(event.id, next)
-    notify(next ? `Marked interested: ${event.title}` : `Removed interest: ${event.title}`)
+  function handleSaveEdit(id: string, patch: Partial<EventDetails>) {
+    // The feed store merges `event` patches onto the existing event details.
+    updatePost(id, { event: patch as EventDetails })
+    notify("Event updated")
   }
 
-  function changeRsvp(event: EventView, state: RsvpState | null) {
-    setRsvp(event.id, state)
-    if (state) notify(`${state === "going" ? "You're going to" : "Marked interested:"} ${event.title}`)
-    else notify(`RSVP cleared: ${event.title}`)
-  }
-
-  function saveEdit(post: FeedPost, patch: Partial<EventDetails>) {
-    updatePost(post.id, { event: { ...(post.event as EventDetails), ...patch } })
-    notify(`Event updated: ${patch.title ?? post.event?.title}`)
-  }
-
-  function deleteEvent(event: EventView) {
-    removePost(event.id)
+  function handleDelete(id: string) {
+    removePost(id)
     setOpenId(null)
-    notify(`Event deleted: ${event.title}`)
+    notify("Event deleted")
+  }
+
+  function setInterest(event: EventView, state: RsvpState | null) {
+    setRsvp(event.id, state)
+    notify(state === "going" ? "You're going" : state === "interested" ? "Marked as interested" : "RSVP cleared")
+  }
+
+  async function share(event: EventView) {
+    const text = `${event.title} · ${event.dateLabel} · ${event.location}`
+    try {
+      if (typeof navigator !== "undefined" && navigator.share) {
+        await navigator.share({ title: event.title, text })
+        return
+      }
+      if (typeof navigator !== "undefined" && navigator.clipboard) {
+        await navigator.clipboard.writeText(text)
+        notify("Event details copied")
+        return
+      }
+    } catch {
+      /* user dismissed share sheet — no action needed */
+      return
+    }
+    notify("Sharing isn't available on this device")
+  }
+
+  function renderGrid(list: EventView[]) {
+    return (
+      <div className="grid gap-4 sm:grid-cols-2">
+        {list.map((event) => (
+          <EventCard
+            key={event.id}
+            event={event}
+            rsvp={rsvp[event.id]}
+            onOpen={() => setOpenId(event.id)}
+            onToggleInterested={() => setInterest(event, rsvp[event.id] ? null : "interested")}
+            onShare={() => share(event)}
+          />
+        ))}
+      </div>
+    )
+  }
+
+  function SectionHeading({ children, count }: { children: React.ReactNode; count: number }) {
+    return (
+      <h2 className="mb-3 flex items-center gap-2 font-display text-lg font-semibold text-foreground">
+        {children}
+        <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{count}</span>
+      </h2>
+    )
+  }
+
+  const emptyCopy: Record<FilterKey, { title: string; body: string; action?: { label: string; href?: string; onClick?: () => void } }> = {
+    all: {
+      title: "No events yet",
+      body: "Create an event above, or join groups and follow communities to see the events they host.",
+      action: { label: "Create event", onClick: () => openComposer.current() },
+    },
+    school: { title: "No school events", body: "Events published by your school will appear here as soon as they're scheduled." },
+    group: {
+      title: "No group events",
+      body: "Join a group to see the events its members organize.",
+      action: { label: "Explore groups", href: "/parent/groups" },
+    },
+    community: {
+      title: "No community events",
+      body: "Follow a community to see the events it hosts.",
+      action: { label: "Explore communities", href: "/parent/communities" },
+    },
+    mine: {
+      title: "No events yet",
+      body: "Create your first event, or RSVP to events to keep track of them here.",
+      action: { label: "Create event", onClick: () => openComposer.current() },
+    },
+  }
+
+  function EmptyState({ config }: { config: (typeof emptyCopy)[FilterKey] }) {
+    return (
+      <Card className="items-center gap-3 p-10 text-center">
+        <span className="grid size-14 place-items-center rounded-2xl bg-brand-muted text-brand">
+          <CalendarX2 className="size-7" />
+        </span>
+        <h3 className="font-display text-lg font-semibold text-foreground">{config.title}</h3>
+        <p className="max-w-sm text-sm text-muted-foreground">{config.body}</p>
+        {config.action &&
+          (config.action.href ? (
+            <Button className="mt-1 rounded-xl" render={<Link href={config.action.href} />}>
+              {config.action.label}
+            </Button>
+          ) : (
+            <Button className="mt-1 rounded-xl" onClick={config.action.onClick}>
+              {config.action.label}
+            </Button>
+          ))}
+      </Card>
+    )
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative w-full sm:max-w-xs">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search events" className="pl-9" aria-label="Search events" />
-        </div>
-        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Filter events by source">
-          {FILTERS.map((option) => (
-            <Button
-              key={option.key}
-              role="tab"
-              aria-selected={filter === option.key}
-              size="sm"
-              variant={filter === option.key ? "default" : "outline"}
-              className="rounded-full"
-              onClick={() => setFilter(option.key)}
-            >
-              {option.label}
-            </Button>
-          ))}
-        </div>
-      </div>
+      {/* Create-event composer (single-purpose on this page) */}
+      <PostComposer
+        onPost={handleCreate}
+        eventDestinations={destinations}
+        initialMode="event"
+        registerOpen={(open) => {
+          openComposer.current = open
+        }}
+      />
 
-      <div className="rounded-2xl border border-border bg-card p-2">
-        <PostComposer onPost={handleCreate} eventDestinations={destinations} initialMode="event" />
-      </div>
-
-      <section aria-labelledby="upcoming-heading" className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 id="upcoming-heading" className="font-display text-lg font-semibold text-foreground">Upcoming</h2>
-          <span className="text-sm text-muted-foreground">{upcoming.length} event{upcoming.length === 1 ? "" : "s"}</span>
-        </div>
-        {upcoming.length > 0 ? (
-          <div className="grid gap-4">
-            {upcoming.map((event) => (
-              <EventCard key={event.id} event={event} rsvp={rsvp[event.id]} onOpen={() => setOpenId(event.id)} onToggleInterested={() => toggleInterested(event)} onShare={() => share(event)} />
-            ))}
-          </div>
-        ) : (
-          <EmptyState
-            icon={query || filter !== "all" ? CalendarX2 : CalendarPlus}
-            title={query || filter !== "all" ? "No matching events" : "No upcoming events yet"}
-            body={query || filter !== "all" ? "Try a different filter or search term." : "Create an event above, or join groups and communities to see their events here."}
+      {/* Search + source filters */}
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="relative md:max-w-xs md:flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search events..."
+            aria-label="Search events"
+            className="h-10 rounded-xl pl-9"
           />
-        )}
-      </section>
+        </div>
+        <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Filter events by source">
+          {FILTERS.map((item) => {
+            const active = filter === item.key
+            return (
+              <button
+                key={item.key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setFilter(item.key)}
+                className={cn(
+                  "rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors",
+                  active ? "bg-brand text-brand-foreground" : "bg-muted text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {item.label}
+              </button>
+            )
+          })}
+        </div>
+      </div>
 
-      {past.length > 0 && (
-        <section aria-labelledby="past-heading" className="space-y-3">
-          <h2 id="past-heading" className="font-display text-lg font-semibold text-foreground">Past events</h2>
-          <div className="grid gap-4">
-            {past.map((event) => (
-              <EventCard key={event.id} event={event} rsvp={rsvp[event.id]} onOpen={() => setOpenId(event.id)} onToggleInterested={() => toggleInterested(event)} onShare={() => share(event)} />
-            ))}
+      {/* Listing */}
+      {filter === "mine" ? (
+        mineCreated.length === 0 && mineAttending.length === 0 ? (
+          <EmptyState config={emptyCopy.mine} />
+        ) : (
+          <div className="space-y-8">
+            <section>
+              <SectionHeading count={mineCreated.length}>Created by me</SectionHeading>
+              {mineCreated.length > 0 ? (
+                renderGrid(orderByTime(mineCreated))
+              ) : (
+                <p className="text-sm text-muted-foreground">You haven&apos;t created any events yet.</p>
+              )}
+            </section>
+            <section>
+              <SectionHeading count={mineAttending.length}>I&apos;m attending / interested</SectionHeading>
+              {mineAttending.length > 0 ? (
+                renderGrid(orderByTime(mineAttending))
+              ) : (
+                <p className="text-sm text-muted-foreground">RSVP to an event to see it here.</p>
+              )}
+            </section>
           </div>
-        </section>
+        )
+      ) : upcoming.length === 0 && past.length === 0 ? (
+        <EmptyState config={emptyCopy[filter]} />
+      ) : (
+        <div className="space-y-8">
+          {upcoming.length > 0 && (
+            <section>
+              <SectionHeading count={upcoming.length}>Upcoming</SectionHeading>
+              {renderGrid(upcoming)}
+            </section>
+          )}
+          {past.length > 0 && (
+            <section>
+              <SectionHeading count={past.length}>Past</SectionHeading>
+              {renderGrid(past)}
+            </section>
+          )}
+        </div>
       )}
 
       <EventDetailsDialog
-        view={openEvent}
-        detail={openPost?.event}
+        view={activeView}
+        detail={activeDetail}
         open={openId !== null}
         onOpenChange={(next) => !next && setOpenId(null)}
-        rsvp={openEvent ? rsvp[openEvent.id] : undefined}
-        onSetRsvp={(state) => openEvent && changeRsvp(openEvent, state)}
-        onShare={() => openEvent && share(openEvent)}
-        onDelete={() => openEvent && deleteEvent(openEvent)}
-        onSaveEdit={(patch) => openPost && saveEdit(openPost, patch)}
+        rsvp={activeView ? rsvp[activeView.id] : undefined}
+        onSetRsvp={(state) => activeView && setInterest(activeView, state)}
+        onShare={() => activeView && share(activeView)}
+        onSaveEdit={(patch) => activeView && handleSaveEdit(activeView.id, patch)}
+        onDelete={() => activeView && handleDelete(activeView.id)}
       />
-    </div>
-  )
-}
 
-function EmptyState({ icon: Icon, title, body }: { icon: React.ElementType; title: string; body: string }) {
-  return (
-    <Card className="grid place-items-center gap-2 border-dashed p-10 text-center">
-      <span className="grid size-12 place-items-center rounded-2xl bg-brand-muted text-brand">
-        <Icon className="size-6" />
-      </span>
-      <h3 className="font-display font-semibold text-foreground">{title}</h3>
-      <p className="max-w-sm text-sm text-muted-foreground text-pretty">{body}</p>
-    </Card>
+      {status && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background shadow-lg"
+        >
+          {status}
+        </div>
+      )}
+    </div>
   )
 }
