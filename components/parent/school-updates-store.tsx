@@ -18,6 +18,11 @@ import { SCHOOL_UPDATES, updatesForSchools, type SchoolUpdate } from "@/lib/scho
 type SchoolUpdatesState = {
   /** Notices for the parent's child's school(s), newest first. */
   updates: SchoolUpdate[]
+  /**
+   * The distinct schools the parent's children attend, derived live from the children store and
+   * sorted alphabetically. Drives the dynamic School Updates filter options — never hardcoded.
+   */
+  schools: string[]
   /** Count of unread notices in `updates`. */
   unreadCount: number
   hydrated: boolean
@@ -49,23 +54,29 @@ export function SchoolUpdatesStoreProvider({ children }: { children: ReactNode }
     localStorage.setItem(READ_KEY, JSON.stringify(readIds))
   }, [hydrated, readIds])
 
+  // The schools the parent has access to, via Parent → Child → School. Adding or removing a child
+  // (or changing a child's school) updates this list, so the filter options stay in sync and a
+  // removed child/school relationship immediately drops that school's access.
+  const schools = useMemo(
+    () => Array.from(new Set(roster.map((child) => child.school))).sort((a, b) => a.localeCompare(b)),
+    [roster],
+  )
+
   // Scope to the schools of the parent's current children (kept in sync as children are added/removed).
-  const updates = useMemo(() => {
-    const schools = Array.from(new Set(roster.map((child) => child.school)))
-    return updatesForSchools(SCHOOL_UPDATES, schools)
-  }, [roster])
+  const updates = useMemo(() => updatesForSchools(SCHOOL_UPDATES, schools), [schools])
 
   const value = useMemo<SchoolUpdatesState>(() => {
     const readSet = new Set(readIds)
     return {
       updates,
+      schools,
       unreadCount: updates.filter((update) => !readSet.has(update.id)).length,
       hydrated,
       isRead: (id: string) => readSet.has(id),
       markRead: (id: string) => setReadIds((ids) => (ids.includes(id) ? ids : [...ids, id])),
       markAllRead: () => setReadIds((ids) => Array.from(new Set([...ids, ...updates.map((u) => u.id)]))),
     }
-  }, [updates, readIds, hydrated])
+  }, [updates, schools, readIds, hydrated])
 
   return <SchoolUpdatesContext.Provider value={value}>{children}</SchoolUpdatesContext.Provider>
 }

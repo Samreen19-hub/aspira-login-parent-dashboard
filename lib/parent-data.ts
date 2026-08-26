@@ -143,7 +143,7 @@ export const CHILDREN: Child[] = [
     id: 'saanvi',
     name: 'Saanvi Kapoor',
     className: 'Class 3',
-    school: 'Greenfield Public School',
+    school: 'Delhi Public School',
     avatar: '/avatar-saanvi.png',
     progress: 88,
     online: true,

@@ -51,10 +51,35 @@ export interface SchoolUpdate {
 
 /**
  * Seed of published notices, mirroring what the School Admin Dashboard would have pushed. These
- * represent explicit parent-facing announcements only. One notice belongs to an unrelated school
- * to prove school-scoped filtering — the parent must never see it.
+ * represent explicit parent-facing announcements only. Notices span the two schools the demo
+ * parent's children attend (Greenfield Public School and Delhi Public School) so the school filter
+ * is meaningful, plus one notice from an unrelated school to prove school-scoped access — the
+ * parent must never see it.
  */
 export const SCHOOL_UPDATES: SchoolUpdate[] = [
+  // --- Delhi Public School (Saanvi) ---
+  {
+    id: "su-dps-sports-day",
+    school: "Delhi Public School",
+    title: "Annual Sports Day",
+    preview: "Annual Sports Day will be held on 20 September 2026. Parents are welcome to attend.",
+    content:
+      "Dear Parents,\n\nDelhi Public School's Annual Sports Day will be held on 20 September 2026 from 8:30 AM to 1:00 PM on the main sports ground. The day includes track events, house relays, and the primary-wing fun games.\n\nParents are warmly invited to attend and cheer for their children. Kindly note the school gates open at 8:00 AM.",
+    category: "Event",
+    publishedAt: "2026-08-26T10:00:00",
+    image: "/post-robotics.png",
+  },
+  {
+    id: "su-dps-fee-circular",
+    school: "Delhi Public School",
+    title: "Circular: Term 2 Fee Payment",
+    preview: "Term 2 fees are due by 10 September 2026. Online payment is now enabled.",
+    content:
+      "This is to inform all parents that the Term 2 fee payment window is now open. Fees must be paid on or before 10 September 2026 through the school's online payment portal.\n\nA late fee will be applicable after the due date. For any billing queries, please contact the accounts office during working hours.",
+    category: "Circular",
+    publishedAt: "2026-08-23T09:00:00",
+  },
+  // --- Greenfield Public School (Aarav) ---
   {
     id: "su-ptm",
     school: "Greenfield Public School",
