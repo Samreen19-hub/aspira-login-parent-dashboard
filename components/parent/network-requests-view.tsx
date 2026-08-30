@@ -77,7 +77,7 @@ function RequestRow({
   onDecline: () => void
 }) {
   const router = useRouter()
-  const profileHref = personProfileHref(person.id)
+  const profileHref = personProfileHref(person.id, "/parent/network/requests")
 
   return (
     <Card className="flex-row items-center gap-4 p-4">

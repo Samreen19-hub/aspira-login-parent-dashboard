@@ -198,8 +198,14 @@ export const FOLLOWERS: NetworkPerson[] = [
 // Stable route helpers. Every network action operates on a person's `id`, and these keep the
 // profile/message URLs consistent across cards, the requests view, and the profile page — and
 // easy to remap when the Parent/Student/School/Company/University dashboards merge.
-export function personProfileHref(id: string) {
-  return `/parent/profile?id=${encodeURIComponent(id)}`
+export function personProfileHref(id: string, returnTo?: string) {
+  const params = new URLSearchParams({ id })
+
+  if (returnTo === "/parent" || returnTo?.startsWith("/parent/")) {
+    params.set("returnTo", returnTo)
+  }
+
+  return `/parent/profile?${params.toString()}`
 }
 
 export function personMessageHref(id: string) {

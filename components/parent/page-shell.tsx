@@ -8,11 +8,15 @@ export function PageShell({
   description,
   icon: Icon = Construction,
   children,
+  backHref = "/parent",
+  backLabel = "Back to home",
 }: {
   title: string
   description?: string
   icon?: React.ElementType
   children?: React.ReactNode
+  backHref?: string
+  backLabel?: string
 }) {
   return (
     <div className="mx-auto max-w-4xl">
@@ -21,7 +25,7 @@ export function PageShell({
           variant="outline"
           size="icon"
           className="rounded-xl"
-          render={<Link href="/parent" aria-label="Back to home" />}
+          render={<Link href={backHref} aria-label={backLabel} />}
         >
           <ArrowLeft className="size-4" />
         </Button>

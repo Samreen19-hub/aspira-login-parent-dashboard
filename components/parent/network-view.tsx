@@ -1,8 +1,10 @@
 "use client"
 
 import { useMemo, useState } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
+  ArrowLeft,
   Users,
   UserRoundCheck,
   UsersRound,
@@ -81,9 +83,19 @@ export function NetworkView() {
   return (
     <div className="mx-auto max-w-6xl">
       {/* Page heading */}
-      <header className="mb-5">
-        <h1 className="font-display text-3xl font-bold text-foreground">My Network</h1>
-        <p className="mt-1 text-muted-foreground">Connect, discover and grow your network on Aspira.</p>
+      <header className="mb-5 flex items-center gap-3">
+        <Button
+          variant="outline"
+          size="icon"
+          className="rounded-xl"
+          render={<Link href="/parent" aria-label="Back to Parent Home" />}
+        >
+          <ArrowLeft className="size-4" />
+        </Button>
+        <div>
+          <h1 className="font-display text-3xl font-bold text-foreground">My Network</h1>
+          <p className="mt-1 text-muted-foreground">Connect, discover and grow your network on Aspira.</p>
+        </div>
       </header>
 
       {/* Search bar */}

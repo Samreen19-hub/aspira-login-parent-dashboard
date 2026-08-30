@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils'
 
 const QUICK_ACTIONS = [
   { label: 'My Children', href: '/parent/children', icon: Users },
+  { label: 'My Network', href: '/parent/network', icon: Users },
   { label: 'School Updates', href: '/parent/school-updates', icon: Megaphone },
   { label: 'Events', href: '/parent/events', icon: CalendarHeart },
   { label: 'Timetable', href: '/parent/timetable', icon: CalendarDays },

@@ -66,7 +66,7 @@ export function NetworkPersonCard({
   const [copied, setCopied] = useState(false)
 
   const isFollowing = variant === "following"
-  const profileHref = personProfileHref(person.id)
+  const profileHref = personProfileHref(person.id, "/parent/network")
   // Absolute URL for the share dialog; falls back to the app path during SSR.
   const shareUrl = typeof window !== "undefined" ? `${window.location.origin}${profileHref}` : profileHref
 
