@@ -5,6 +5,7 @@ export type NetworkPerson = {
   headline: string
   location: string
   mutualConnections: number
+  connectedAt?: string
   verified?: boolean
 }
 
@@ -22,6 +23,7 @@ export const CONNECTIONS: NetworkPerson[] = [
     headline: "Parent at Greenfield International School",
     location: "Bengaluru, India",
     mutualConnections: 12,
+    connectedAt: "2026-08-24T09:15:00.000Z",
     verified: true,
   },
   {
@@ -31,6 +33,7 @@ export const CONNECTIONS: NetworkPerson[] = [
     headline: "Teacher at Greenfield International School",
     location: "Bengaluru, India",
     mutualConnections: 8,
+    connectedAt: "2026-08-19T14:30:00.000Z",
     verified: true,
   },
   {
@@ -40,6 +43,7 @@ export const CONNECTIONS: NetworkPerson[] = [
     headline: "Parent at Delhi Public School",
     location: "New Delhi, India",
     mutualConnections: 15,
+    connectedAt: "2026-08-12T11:45:00.000Z",
     verified: true,
   },
   {
@@ -49,6 +53,7 @@ export const CONNECTIONS: NetworkPerson[] = [
     headline: "Software Engineer at Aspira Technologies",
     location: "Bengaluru, India",
     mutualConnections: 6,
+    connectedAt: "2026-08-07T08:20:00.000Z",
   },
   {
     id: "kavya-rao",
@@ -57,6 +62,7 @@ export const CONNECTIONS: NetworkPerson[] = [
     headline: "Education Consultant",
     location: "Bengaluru, India",
     mutualConnections: 10,
+    connectedAt: "2026-07-29T16:10:00.000Z",
   },
   {
     id: "meera-iyer",
@@ -65,6 +71,7 @@ export const CONNECTIONS: NetworkPerson[] = [
     headline: "Parent at Sunshine International School",
     location: "Bengaluru, India",
     mutualConnections: 7,
+    connectedAt: "2026-07-18T10:05:00.000Z",
   },
   {
     id: "vikram-malhotra",
@@ -73,6 +80,7 @@ export const CONNECTIONS: NetworkPerson[] = [
     headline: "Principal at Sunshine High School",
     location: "Mumbai, India",
     mutualConnections: 9,
+    connectedAt: "2026-07-09T13:25:00.000Z",
     verified: true,
   },
   {
@@ -82,6 +90,7 @@ export const CONNECTIONS: NetworkPerson[] = [
     headline: "Parent at Delhi Public School",
     location: "New Delhi, India",
     mutualConnections: 11,
+    connectedAt: "2026-06-28T09:40:00.000Z",
   },
 ]
 
@@ -129,6 +138,7 @@ export const FOLLOWING: NetworkPerson[] = [
     headline: "Principal at Sunshine High School",
     location: "Mumbai, India",
     mutualConnections: 9,
+    connectedAt: "2026-07-09T13:25:00.000Z",
     verified: true,
   },
   {
@@ -147,6 +157,7 @@ export const FOLLOWING: NetworkPerson[] = [
     headline: "Education Consultant",
     location: "Bengaluru, India",
     mutualConnections: 10,
+    connectedAt: "2026-07-29T16:10:00.000Z",
   },
   {
     id: "rohan-mehta",
@@ -184,6 +195,7 @@ export const FOLLOWERS: NetworkPerson[] = [
     headline: "Parent at Sunshine International School",
     location: "Bengaluru, India",
     mutualConnections: 7,
+    connectedAt: "2026-07-18T10:05:00.000Z",
   },
   {
     id: "ananya-desai",
@@ -192,6 +204,7 @@ export const FOLLOWERS: NetworkPerson[] = [
     headline: "Parent at Delhi Public School",
     location: "New Delhi, India",
     mutualConnections: 11,
+    connectedAt: "2026-06-28T09:40:00.000Z",
   },
 ]
 
@@ -245,6 +258,7 @@ export const DISCOVER: NetworkPerson[] = [
     headline: "Parent at Delhi Public School",
     location: "New Delhi, India",
     mutualConnections: 15,
+    connectedAt: "2026-08-12T11:45:00.000Z",
     verified: true,
   },
   {
@@ -254,5 +268,6 @@ export const DISCOVER: NetworkPerson[] = [
     headline: "Software Engineer at Aspira Technologies",
     location: "Bengaluru, India",
     mutualConnections: 6,
+    connectedAt: "2026-08-07T08:20:00.000Z",
   },
 ]

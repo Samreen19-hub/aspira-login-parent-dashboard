@@ -41,7 +41,7 @@ const DECLINED_KEY = "aspira-parent-declined-requests"
 
 export function NetworkStoreProvider({ children }: { children: ReactNode }) {
   const [removedConnections, setRemovedConnections] = useState<string[]>([])
-  const [acceptedRequests, setAcceptedRequests] = useState<string[]>([])
+  const [acceptedRequests, setAcceptedRequests] = useState<Record<string, string>>({})
   const [declinedRequests, setDeclinedRequests] = useState<string[]>([])
   const [hydrated, setHydrated] = useState(false)
 
@@ -51,7 +51,14 @@ export function NetworkStoreProvider({ children }: { children: ReactNode }) {
       const accepted = localStorage.getItem(ACCEPTED_KEY)
       const declined = localStorage.getItem(DECLINED_KEY)
       if (removed) setRemovedConnections(JSON.parse(removed))
-      if (accepted) setAcceptedRequests(JSON.parse(accepted))
+      if (accepted) {
+        const parsed: unknown = JSON.parse(accepted)
+        setAcceptedRequests(
+          Array.isArray(parsed)
+            ? Object.fromEntries(parsed.map((id) => [String(id), new Date().toISOString()]))
+            : (parsed as Record<string, string>),
+        )
+      }
       if (declined) setDeclinedRequests(JSON.parse(declined))
     } catch {
     } finally {
@@ -73,13 +80,14 @@ export function NetworkStoreProvider({ children }: { children: ReactNode }) {
   }, [hydrated, declinedRequests])
 
   const value = useMemo<NetworkState>(() => {
-    // Accepted requests are prepended to Connections so a freshly accepted person shows up first.
-    const acceptedPeople = CONNECTION_REQUESTS.filter((p) => acceptedRequests.includes(p.id))
+    const acceptedPeople = CONNECTION_REQUESTS.filter((p) => acceptedRequests[p.id]).map(
+      (person) => ({ ...person, connectedAt: acceptedRequests[person.id] }),
+    )
     const connections = [...acceptedPeople, ...CONNECTIONS].filter(
       (p) => !removedConnections.includes(p.id),
     )
     const requests = CONNECTION_REQUESTS.filter(
-      (p) => !acceptedRequests.includes(p.id) && !declinedRequests.includes(p.id),
+      (p) => !acceptedRequests[p.id] && !declinedRequests.includes(p.id),
     )
     const following = FOLLOWING
     const followers = FOLLOWERS
@@ -101,7 +109,9 @@ export function NetworkStoreProvider({ children }: { children: ReactNode }) {
       requestCount: requests.length,
       hydrated,
       acceptRequest: (id: string) =>
-        setAcceptedRequests((ids) => (ids.includes(id) ? ids : [...ids, id])),
+        setAcceptedRequests((accepted) =>
+          accepted[id] ? accepted : { ...accepted, [id]: new Date().toISOString() },
+        ),
       declineRequest: (id: string) =>
         setDeclinedRequests((ids) => (ids.includes(id) ? ids : [...ids, id])),
       removeConnection: (id: string) =>

@@ -65,11 +65,31 @@ export function NetworkView() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return people
-    return people.filter(
-      (p) => p.name.toLowerCase().includes(q) || p.headline.toLowerCase().includes(q),
-    )
-  }, [people, query])
+    const matches = q
+      ? people.filter(
+          (p) => p.name.toLowerCase().includes(q) || p.headline.toLowerCase().includes(q),
+        )
+      : people
+
+    if (tab !== "connections") return matches
+
+    return [...matches].sort((a, b) => {
+      if (sort === "Name (A-Z)") {
+        return (
+          a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) ||
+          a.id.localeCompare(b.id)
+        )
+      }
+
+      if (sort === "Most Mutual Connections") {
+        return b.mutualConnections - a.mutualConnections || a.id.localeCompare(b.id)
+      }
+
+      const aConnectedAt = a.connectedAt ? Date.parse(a.connectedAt) : 0
+      const bConnectedAt = b.connectedAt ? Date.parse(b.connectedAt) : 0
+      return bConnectedAt - aConnectedAt || a.id.localeCompare(b.id)
+    })
+  }, [people, query, sort, tab])
 
   const totalCount =
     tab === "connections"
