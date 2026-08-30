@@ -195,6 +195,26 @@ export const FOLLOWERS: NetworkPerson[] = [
   },
 ]
 
+// Stable route helpers. Every network action operates on a person's `id`, and these keep the
+// profile/message URLs consistent across cards, the requests view, and the profile page — and
+// easy to remap when the Parent/Student/School/Company/University dashboards merge.
+export function personProfileHref(id: string) {
+  return `/parent/profile?id=${encodeURIComponent(id)}`
+}
+
+export function personMessageHref(id: string) {
+  return `/parent/messages?to=${encodeURIComponent(id)}`
+}
+
+// Single lookup across every relationship list so any surface can resolve a person by id without
+// duplicating the sample data. Ids are shared across lists (a person can be both a follower and a
+// connection), so the first match wins.
+export function getNetworkPerson(id: string): NetworkPerson | undefined {
+  return [...CONNECTIONS, ...CONNECTION_REQUESTS, ...FOLLOWING, ...FOLLOWERS, ...DISCOVER].find(
+    (person) => person.id === id,
+  )
+}
+
 export const DISCOVER: NetworkPerson[] = [
   {
     id: "kabir-mehta",

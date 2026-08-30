@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import {
   Users,
   UserRoundCheck,
@@ -24,14 +25,10 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import { NetworkPersonCard } from "@/components/parent/network-person-card"
-import {
-  CONNECTIONS,
-  CONNECTION_REQUESTS,
-  FOLLOWERS,
-  FOLLOWING,
-  DISCOVER,
-  NETWORK_STATS,
-} from "@/lib/network-data"
+import { useNetworkStore } from "@/components/parent/network-store"
+import { DISCOVER } from "@/lib/network-data"
+
+const REQUESTS_HREF = "/parent/network/requests"
 
 type TabId = "connections" | "following" | "followers" | "discover"
 
@@ -45,6 +42,8 @@ const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
 const SORT_OPTIONS = ["Recently Added", "Name (A-Z)", "Most Mutual Connections"]
 
 export function NetworkView() {
+  const router = useRouter()
+  const store = useNetworkStore()
   const [tab, setTab] = useState<TabId>("connections")
   const [query, setQuery] = useState("")
   const [sort, setSort] = useState(SORT_OPTIONS[0])
@@ -52,15 +51,15 @@ export function NetworkView() {
   const { people, title, variant } = useMemo(() => {
     switch (tab) {
       case "following":
-        return { people: FOLLOWING, title: "People You Follow", variant: "following" as const }
+        return { people: store.following, title: "People You Follow", variant: "following" as const }
       case "followers":
-        return { people: FOLLOWERS, title: "Your Followers", variant: "follower" as const }
+        return { people: store.followers, title: "Your Followers", variant: "follower" as const }
       case "discover":
         return { people: DISCOVER, title: "Discover People", variant: "discover" as const }
       default:
-        return { people: CONNECTIONS, title: "Your Connections", variant: "connection" as const }
+        return { people: store.connections, title: "Your Connections", variant: "connection" as const }
     }
-  }, [tab])
+  }, [tab, store.following, store.followers, store.connections])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -72,11 +71,11 @@ export function NetworkView() {
 
   const totalCount =
     tab === "connections"
-      ? NETWORK_STATS.connections
+      ? store.connectionCount
       : tab === "following"
-        ? NETWORK_STATS.following
+        ? store.followingCount
         : tab === "followers"
-          ? NETWORK_STATS.followers
+          ? store.followerCount
           : filtered.length
 
   return (
