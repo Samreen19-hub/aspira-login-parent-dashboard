@@ -1,2 +1,5 @@
-import { SectionMock } from "@/components/parent/section-mock"
-export default function NetworkPage() { return <SectionMock kind="network" /> }
+import { NetworkView } from "@/components/parent/network-view"
+
+export default function NetworkPage() {
+  return <NetworkView />
+}
