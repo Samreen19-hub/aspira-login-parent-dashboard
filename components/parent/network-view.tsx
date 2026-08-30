@@ -112,34 +112,51 @@ export function NetworkView() {
       <div className="mb-6 grid gap-4 lg:grid-cols-[1fr_minmax(0,340px)]">
         <Card className="justify-center p-5">
           <div className="grid grid-cols-3 divide-x divide-border">
-            <Stat icon={Users} value={NETWORK_STATS.connections} label="Connections" tone="brand" />
-            <Stat icon={UserRoundCheck} value={NETWORK_STATS.following} label="Following" tone="emerald" />
-            <Stat icon={UsersRound} value={NETWORK_STATS.followers} label="Followers" tone="violet" />
+            <Stat icon={Users} value={store.connectionCount} label="Connections" tone="brand" />
+            <Stat icon={UserRoundCheck} value={store.followingCount} label="Following" tone="emerald" />
+            <Stat icon={UsersRound} value={store.followerCount} label="Followers" tone="violet" />
           </div>
         </Card>
 
         <Card className="gap-3 p-5">
           <div className="flex items-center justify-between">
             <p className="font-display font-semibold text-foreground">
-              Connection Requests ({CONNECTION_REQUESTS.length})
+              Connection Requests ({store.requestCount})
             </p>
-            <button type="button" className="text-sm font-medium text-brand hover:underline">
+            <button
+              type="button"
+              onClick={() => router.push(REQUESTS_HREF)}
+              className="text-sm font-medium text-brand hover:underline"
+            >
               See all
             </button>
           </div>
           <div className="flex items-center justify-between gap-3">
-            <div className="flex -space-x-3">
-              {CONNECTION_REQUESTS.map((req) => (
-                <Avatar key={req.id} className="size-11 ring-2 ring-card">
-                  <AvatarImage src={req.avatar || "/placeholder.svg"} alt={req.name} />
-                  <AvatarFallback>{req.name[0]}</AvatarFallback>
-                </Avatar>
-              ))}
-            </div>
+            {store.requests.length > 0 ? (
+              <div className="flex -space-x-3">
+                {store.requests.map((req) => (
+                  <button
+                    key={req.id}
+                    type="button"
+                    onClick={() => router.push(REQUESTS_HREF)}
+                    className="rounded-full outline-none ring-brand/40 transition-transform hover:z-10 hover:-translate-y-0.5 focus-visible:ring-2"
+                    aria-label={`Review request from ${req.name}`}
+                  >
+                    <Avatar className="size-11 ring-2 ring-card">
+                      <AvatarImage src={req.avatar || "/placeholder.svg"} alt={req.name} />
+                      <AvatarFallback>{req.name[0]}</AvatarFallback>
+                    </Avatar>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No pending requests.</p>
+            )}
             <Button
               variant="outline"
               size="icon"
-              aria-label="View next request"
+              aria-label="View all requests"
+              onClick={() => router.push(REQUESTS_HREF)}
               className="size-8 shrink-0 rounded-full"
             >
               <ChevronRight className="size-4" />
