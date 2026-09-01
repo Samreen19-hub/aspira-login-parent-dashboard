@@ -146,11 +146,6 @@ export function LoginForm({ persona }: LoginFormProps) {
           Create Account
         </Link>
       </p>
-
-      <p className="mt-4 rounded-lg bg-muted px-3 py-2 text-center text-xs text-muted-foreground">
-        Demo login — <span className="font-medium text-foreground">parent@aspira.com</span> /{' '}
-        <span className="font-medium text-foreground">password123</span>
-      </p>
     </div>
   )
 }
