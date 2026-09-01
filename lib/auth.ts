@@ -5,14 +5,18 @@ import { pool } from '@/lib/db'
 /**
  * Better Auth server config wired to the existing Neon database.
  *
- * The session secret and canonical URL come from the pre-provisioned
- * `NEON_AUTH_COOKIE_SECRET` / `NEON_AUTH_BASE_URL` environment variables.
+ * The session secret comes from the pre-provisioned `NEON_AUTH_COOKIE_SECRET`.
+ *
+ * NOTE: `baseURL` must be THIS app's own origin. It must NOT be set to
+ * `NEON_AUTH_BASE_URL` — that variable points at the Neon Auth service
+ * endpoint and carries a path (`/neondb/auth`). Better Auth derives its
+ * mount path (`basePath`) from `baseURL`'s pathname, so using it would move
+ * the handler off `/api/auth` and make every `/api/auth/*` request 404.
  */
 export const auth = betterAuth({
   database: pool,
   secret: process.env.NEON_AUTH_COOKIE_SECRET,
   baseURL:
-    process.env.NEON_AUTH_BASE_URL ??
     process.env.BETTER_AUTH_URL ??
     (process.env.VERCEL_PROJECT_PRODUCTION_URL
       ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
@@ -24,7 +28,6 @@ export const auth = betterAuth({
     autoSignIn: true,
   },
   trustedOrigins: [
-    ...(process.env.NEON_AUTH_BASE_URL ? [process.env.NEON_AUTH_BASE_URL] : []),
     ...(process.env.NODE_ENV === 'development'
       ? [
           'http://localhost:3000',
