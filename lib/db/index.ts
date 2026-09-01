@@ -13,7 +13,12 @@ import * as schema from './schema'
  */
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  options: '-c search_path=neon_auth,public',
+})
+
+// The pooled Neon endpoint (PgBouncer) rejects `search_path` as a startup
+// parameter, so set it as a regular `SET` query on each new connection instead.
+pool.on('connect', (client) => {
+  client.query('SET search_path TO neon_auth, public')
 })
 
 export const db = drizzle(pool, { schema })

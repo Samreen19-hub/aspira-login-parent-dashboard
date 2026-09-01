@@ -12,7 +12,7 @@
     "@base-ui/react": "^1.5.0",
     "@neondatabase/auth": "0.5.0-beta",
     "@vercel/analytics": "1.6.1",
-    "better-auth": "^1.7.2",
+    "better-auth": "^1.6.30",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
