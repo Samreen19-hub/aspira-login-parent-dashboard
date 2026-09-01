@@ -50,18 +50,23 @@ export const auth = betterAuth({
     expiresIn: 60 * 60 * 24 * 7, // 7 days
     updateAge: 60 * 60 * 24, // 1 day
   },
-  ...(process.env.NODE_ENV === 'development'
-    ? {
-        advanced: {
-          // In dev (v0 preview iframe), force cross-site cookies so the
-          // session cookie is stored by the browser.
+  advanced: {
+    // The Neon `neon_auth` tables use `uuid` primary keys, so Better Auth
+    // must emit real UUIDs instead of its default random string IDs.
+    database: {
+      generateId: () => crypto.randomUUID(),
+    },
+    // In dev (v0 preview iframe), force cross-site cookies so the session
+    // cookie is stored by the browser.
+    ...(process.env.NODE_ENV === 'development'
+      ? {
           defaultCookieAttributes: {
             sameSite: 'none' as const,
             secure: true,
           },
-        },
-      }
-    : {}),
+        }
+      : {}),
+  },
   // Must be last: propagates Set-Cookie from server actions into Next.js.
   plugins: [nextCookies()],
 })
