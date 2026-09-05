@@ -1,3 +1,12 @@
+// Relationship of another real user to the currently signed-in user, derived
+// server-side from the `public.connections` table. Drives the Discover card's
+// primary button state (Connect / Request Sent / Respond / Connected).
+export type RelationshipStatus =
+  | "none"
+  | "pending_outgoing"
+  | "pending_incoming"
+  | "connected"
+
 export type NetworkPerson = {
   id: string
   name: string
@@ -7,6 +16,11 @@ export type NetworkPerson = {
   mutualConnections: number
   connectedAt?: string
   verified?: boolean
+  // Populated for real database-backed people. `relationshipStatus` reflects the
+  // viewer's relationship to this person; `connectionId` is the `connections`
+  // row id used to accept/decline an incoming request.
+  relationshipStatus?: RelationshipStatus
+  connectionId?: string
 }
 
 export const NETWORK_STATS = {

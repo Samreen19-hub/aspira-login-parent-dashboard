@@ -1,123 +1,103 @@
 "use client"
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
+import { createContext, useContext, useMemo, type ReactNode } from "react"
+import useSWR from "swr"
 import {
-  CONNECTIONS,
-  CONNECTION_REQUESTS,
-  FOLLOWING,
-  FOLLOWERS,
-  NETWORK_STATS,
-  type NetworkPerson,
-} from "@/lib/network-data"
+  acceptConnectionRequest,
+  declineConnectionRequest,
+  getConnections,
+  getDiscoverPeople,
+  getIncomingRequests,
+  removeConnection as removeConnectionAction,
+  sendConnectionRequest,
+  type SendRequestResult,
+} from "@/app/actions/network"
+import { FOLLOWING, FOLLOWERS, NETWORK_STATS, type NetworkPerson } from "@/lib/network-data"
 
-// Single source of truth for the parent's people-relationships (connections, pending requests,
-// following, followers). The existing social-store handles group/community spaces only, so this is
-// the one relationship store for people — no duplicate stores. State is tracked as id lists layered
-// over the sample data so it stays small, serializable, and easy to remap when the Parent, Student,
-// School, Company and University dashboards merge onto a shared relationship model.
+// Single source of truth for the parent's people-relationships. Connections, incoming requests and
+// Discover are backed by the real Neon `public.connections` table through server actions (fetched
+// and cached with SWR); mutations call those actions and then revalidate so the database stays the
+// source of truth and refreshing never loses state. Following/Followers remain demo-only data —
+// there is no follow schema yet — so this store keeps their existing behavior untouched.
 type NetworkState = {
   connections: NetworkPerson[]
   requests: NetworkPerson[]
+  discover: NetworkPerson[]
   following: NetworkPerson[]
   followers: NetworkPerson[]
   connectionCount: number
   followingCount: number
   followerCount: number
   requestCount: number
-  hydrated: boolean
-  // Moves a pending request into Connections and bumps the connection count.
-  acceptRequest: (id: string) => void
-  // Drops a pending request without adding a connection.
-  declineRequest: (id: string) => void
-  // Removes a person from Connections and decrements the connection count.
-  removeConnection: (id: string) => void
+  // True during the initial load of the database-backed lists.
+  isLoading: boolean
+  // True when any of the database-backed lists failed to load.
+  error: boolean
+  // Sends a connection request to a real user and refreshes Discover + Connections.
+  sendRequest: (userId: string) => Promise<SendRequestResult>
+  // Accepts an incoming request (by connections row id) and refreshes all lists.
+  acceptRequest: (connectionId: string) => Promise<void>
+  // Declines an incoming request (by connections row id) and refreshes requests.
+  declineRequest: (connectionId: string) => Promise<void>
+  // Removes an accepted connection (by the other person's user id) and refreshes.
+  removeConnection: (userId: string) => Promise<void>
 }
 
 const NetworkContext = createContext<NetworkState | null>(null)
 
-const REMOVED_KEY = "aspira-parent-removed-connections"
-const ACCEPTED_KEY = "aspira-parent-accepted-requests"
-const DECLINED_KEY = "aspira-parent-declined-requests"
+const DISCOVER_KEY = "parent-network:discover"
+const CONNECTIONS_KEY = "parent-network:connections"
+const REQUESTS_KEY = "parent-network:requests"
 
 export function NetworkStoreProvider({ children }: { children: ReactNode }) {
-  const [removedConnections, setRemovedConnections] = useState<string[]>([])
-  const [acceptedRequests, setAcceptedRequests] = useState<Record<string, string>>({})
-  const [declinedRequests, setDeclinedRequests] = useState<string[]>([])
-  const [hydrated, setHydrated] = useState(false)
-
-  useEffect(() => {
-    try {
-      const removed = localStorage.getItem(REMOVED_KEY)
-      const accepted = localStorage.getItem(ACCEPTED_KEY)
-      const declined = localStorage.getItem(DECLINED_KEY)
-      if (removed) setRemovedConnections(JSON.parse(removed))
-      if (accepted) {
-        const parsed: unknown = JSON.parse(accepted)
-        setAcceptedRequests(
-          Array.isArray(parsed)
-            ? Object.fromEntries(parsed.map((id) => [String(id), new Date().toISOString()]))
-            : (parsed as Record<string, string>),
-        )
-      }
-      if (declined) setDeclinedRequests(JSON.parse(declined))
-    } catch {
-    } finally {
-      setHydrated(true)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!hydrated) return
-    localStorage.setItem(REMOVED_KEY, JSON.stringify(removedConnections))
-  }, [hydrated, removedConnections])
-  useEffect(() => {
-    if (!hydrated) return
-    localStorage.setItem(ACCEPTED_KEY, JSON.stringify(acceptedRequests))
-  }, [hydrated, acceptedRequests])
-  useEffect(() => {
-    if (!hydrated) return
-    localStorage.setItem(DECLINED_KEY, JSON.stringify(declinedRequests))
-  }, [hydrated, declinedRequests])
+  const discover = useSWR(DISCOVER_KEY, getDiscoverPeople)
+  const connections = useSWR(CONNECTIONS_KEY, getConnections)
+  const requests = useSWR(REQUESTS_KEY, getIncomingRequests)
 
   const value = useMemo<NetworkState>(() => {
-    const acceptedPeople = CONNECTION_REQUESTS.filter((p) => acceptedRequests[p.id]).map(
-      (person) => ({ ...person, connectedAt: acceptedRequests[person.id] }),
-    )
-    const connections = [...acceptedPeople, ...CONNECTIONS].filter(
-      (p) => !removedConnections.includes(p.id),
-    )
-    const requests = CONNECTION_REQUESTS.filter(
-      (p) => !acceptedRequests[p.id] && !declinedRequests.includes(p.id),
-    )
-    const following = FOLLOWING
-    const followers = FOLLOWERS
+    const connectionList = connections.data ?? []
+    const requestList = requests.data ?? []
+    const discoverList = discover.data ?? []
 
-    // Counts stay anchored to the seeded totals (128/85/64) and only move by the relative delta of
-    // the current session's accepts/removes, so the header and stat cards stay in sync. Accepting a
-    // request is +1 and removing a connection is -1; a person accepted then removed nets to zero.
-    const connectionCount =
-      NETWORK_STATS.connections + acceptedPeople.length - removedConnections.length
+    async function refreshAll() {
+      await Promise.all([discover.mutate(), connections.mutate(), requests.mutate()])
+    }
 
     return {
-      connections,
-      requests,
-      following,
-      followers,
-      connectionCount,
+      connections: connectionList,
+      requests: requestList,
+      discover: discoverList,
+      following: FOLLOWING,
+      followers: FOLLOWERS,
+      connectionCount: connectionList.length,
+      // Following/Followers are demo-only (no schema); keep the seeded totals.
       followingCount: NETWORK_STATS.following,
       followerCount: NETWORK_STATS.followers,
-      requestCount: requests.length,
-      hydrated,
-      acceptRequest: (id: string) =>
-        setAcceptedRequests((accepted) =>
-          accepted[id] ? accepted : { ...accepted, [id]: new Date().toISOString() },
-        ),
-      declineRequest: (id: string) =>
-        setDeclinedRequests((ids) => (ids.includes(id) ? ids : [...ids, id])),
-      removeConnection: (id: string) =>
-        setRemovedConnections((ids) => (ids.includes(id) ? ids : [...ids, id])),
+      requestCount: requestList.length,
+      isLoading:
+        (!discover.data && !discover.error) ||
+        (!connections.data && !connections.error) ||
+        (!requests.data && !requests.error),
+      error: Boolean(discover.error || connections.error || requests.error),
+      sendRequest: async (userId: string) => {
+        const result = await sendConnectionRequest(userId)
+        await Promise.all([discover.mutate(), connections.mutate()])
+        return result
+      },
+      acceptRequest: async (connectionId: string) => {
+        await acceptConnectionRequest(connectionId)
+        await refreshAll()
+      },
+      declineRequest: async (connectionId: string) => {
+        await declineConnectionRequest(connectionId)
+        await Promise.all([requests.mutate(), discover.mutate()])
+      },
+      removeConnection: async (userId: string) => {
+        await removeConnectionAction(userId)
+        await Promise.all([connections.mutate(), discover.mutate()])
+      },
     }
-  }, [removedConnections, acceptedRequests, declinedRequests, hydrated])
+  }, [discover, connections, requests])
 
   return <NetworkContext.Provider value={value}>{children}</NetworkContext.Provider>
 }
