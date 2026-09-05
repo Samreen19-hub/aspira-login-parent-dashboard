@@ -30,7 +30,6 @@ import {
 import { cn } from "@/lib/utils"
 import { NetworkPersonCard } from "@/components/parent/network-person-card"
 import { useNetworkStore } from "@/components/parent/network-store"
-import { DISCOVER } from "@/lib/network-data"
 
 const REQUESTS_HREF = "/parent/network/requests"
 
@@ -59,11 +58,11 @@ export function NetworkView() {
       case "followers":
         return { people: store.followers, title: "Your Followers", variant: "follower" as const }
       case "discover":
-        return { people: DISCOVER, title: "Discover People", variant: "discover" as const }
+        return { people: store.discover, title: "Discover People", variant: "discover" as const }
       default:
         return { people: store.connections, title: "Your Connections", variant: "connection" as const }
     }
-  }, [tab, store.following, store.followers, store.connections])
+  }, [tab, store.discover, store.following, store.followers, store.connections])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()

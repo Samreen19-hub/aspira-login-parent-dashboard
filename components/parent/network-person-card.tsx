@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
+import { Loader2 } from "lucide-react"
 import {
   BadgeCheck,
   MoreHorizontal,
@@ -60,12 +61,15 @@ export function NetworkPersonCard({
   variant?: Variant
 }) {
   const router = useRouter()
-  const { removeConnection } = useNetworkStore()
+  const { removeConnection, sendRequest } = useNetworkStore()
   const [shareOpen, setShareOpen] = useState(false)
+  const [requestSubmitting, setRequestSubmitting] = useState(false)
+  const [requestError, setRequestError] = useState<string | null>(null)
   const [removeOpen, setRemoveOpen] = useState(false)
   const [copied, setCopied] = useState(false)
 
   const isFollowing = variant === "following"
+  const relationshipStatus = person.relationshipStatus ?? "none"
   const profileHref = personProfileHref(person.id, "/parent/network")
   // Absolute URL for the share dialog; falls back to the app path during SSR.
   const shareUrl = typeof window !== "undefined" ? `${window.location.origin}${profileHref}` : profileHref
@@ -76,6 +80,19 @@ export function NetworkPersonCard({
 
   function messagePerson() {
     router.push(personMessageHref(person.id))
+  }
+
+  async function connectPerson() {
+    if (requestSubmitting || person.relationshipStatus !== "none") return
+    setRequestSubmitting(true)
+    setRequestError(null)
+    try {
+      await sendRequest(person.id)
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : "Could not send the connection request.")
+    } finally {
+      setRequestSubmitting(false)
+    }
   }
 
   async function copyLink() {
@@ -169,16 +186,41 @@ export function NetworkPersonCard({
         <span className="text-xs text-muted-foreground">{person.mutualConnections} mutual connections</span>
       </div>
 
+      {requestError && variant === "discover" && (
+        <p className="mt-3 text-xs text-destructive" role="alert">
+          {requestError}
+        </p>
+      )}
+
       <div className="mt-4 flex w-full items-center gap-2">
         <Button
           variant="outline"
-          onClick={variant === "connection" ? messagePerson : viewProfile}
+          onClick={
+            variant === "discover"
+              ? relationshipStatus === "none"
+                ? connectPerson
+                : relationshipStatus === "pending_incoming"
+                  ? () => router.push("/parent/network/requests")
+                  : relationshipStatus === "connected"
+                    ? messagePerson
+                    : undefined
+              : variant === "connection"
+                ? messagePerson
+                : viewProfile
+          }
+          disabled={variant === "discover" && (requestSubmitting || relationshipStatus === "pending_outgoing")}
           className="flex-1 gap-1.5 rounded-lg text-brand hover:text-brand"
         >
-          {variant === "discover" && <UserRoundPlus className="size-4" />}
-          {variant === "follower" && <UserRoundPlus className="size-4" />}
-          {isFollowing && <UserRoundCheck className="size-4" />}
-          {primaryLabel(variant)}
+          {requestSubmitting ? <Loader2 className="size-4 animate-spin" /> : relationshipStatus === "none" && variant === "discover" ? <UserRoundPlus className="size-4" /> : isFollowing ? <UserRoundCheck className="size-4" /> : relationshipStatus === "connected" ? <Check className="size-4" /> : null}
+          {variant === "discover"
+            ? relationshipStatus === "pending_outgoing"
+              ? "Request Sent"
+              : relationshipStatus === "pending_incoming"
+                ? "Respond"
+                : relationshipStatus === "connected"
+                  ? "Connected"
+                  : "Connect"
+            : primaryLabel(variant)}
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger
