@@ -1,6 +1,6 @@
 'use server'
 
-import { and, eq, ne, or } from 'drizzle-orm'
+import { and, eq, ne, notInArray, or } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 import { auth } from '@/lib/auth'
@@ -79,22 +79,33 @@ const PERSON_COLUMNS = {
 export async function getDiscoverPeople(): Promise<NetworkPerson[]> {
   const meId = await getUserId()
 
-  const [people, myConnections] = await Promise.all([
-    db
-      .select(PERSON_COLUMNS)
-      .from(profiles)
-      .leftJoin(user, eq(user.id, profiles.userId))
-      .where(ne(profiles.userId, meId)),
-    db
-      .select()
-      .from(connections)
-      .where(
-        or(
-          eq(connections.requesterId, meId),
-          eq(connections.recipientId, meId),
-        ),
+  const myConnections = await db
+    .select()
+    .from(connections)
+    .where(
+      or(
+        eq(connections.requesterId, meId),
+        eq(connections.recipientId, meId),
       ),
-  ])
+    )
+
+  const acceptedUserIds = myConnections
+    .filter((connection) => connection.status === 'accepted')
+    .map((connection) =>
+      connection.requesterId === meId
+        ? connection.recipientId
+        : connection.requesterId,
+    )
+
+  const discoverWhere = acceptedUserIds.length
+    ? and(ne(profiles.userId, meId), notInArray(profiles.userId, acceptedUserIds))
+    : ne(profiles.userId, meId)
+
+  const people = await db
+    .select(PERSON_COLUMNS)
+    .from(profiles)
+    .leftJoin(user, eq(user.id, profiles.userId))
+    .where(discoverWhere)
 
   // Map otherUserId -> relationship info for O(1) lookup while projecting.
   const byOther = new Map<

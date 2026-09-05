@@ -44,8 +44,8 @@ export function NetworkRequestsView() {
             <RequestRow
               key={person.id}
               person={person}
-              onAccept={() => acceptRequest(person.id)}
-              onDecline={() => declineRequest(person.id)}
+              onAccept={() => person.connectionId && acceptRequest(person.connectionId)}
+              onDecline={() => person.connectionId && declineRequest(person.connectionId)}
             />
           ))}
         </div>
