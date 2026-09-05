@@ -21,6 +21,17 @@ const authBaseURL =
       ? `https://${process.env.VERCEL_URL}`
       : process.env.V0_RUNTIME_URL)
 
+// Vercel/v0 exposes HTTPS to the browser even when the server process uses a
+// localhost fallback. Only the explicit local HTTP case should use Lax.
+const isHttpsPreview = Boolean(
+  process.env.VERCEL_URL ||
+    process.env.VERCEL_PROJECT_PRODUCTION_URL ||
+    process.env.V0_RUNTIME_URL ||
+    process.env.V0_DEV_APP_URL ||
+    process.env.V0_BUILD_URL ||
+    process.env.V0_SANDBOX_URL,
+)
+
 export const auth = betterAuth({
   database: pool,
   secret: process.env.NEON_AUTH_COOKIE_SECRET,
@@ -58,13 +69,14 @@ export const auth = betterAuth({
     database: {
       generateId: () => crypto.randomUUID(),
     },
-    // In dev (v0 preview iframe), force cross-site cookies so the session
-    // cookie is stored by the browser.
+    // v0/Vercel previews are HTTPS in the browser even when the server uses
+    // localhost internally. Genuine HTTP localhost must use Lax; None without
+    // Secure is rejected by browsers.
     ...(process.env.NODE_ENV === 'development'
       ? {
           defaultCookieAttributes: {
-            sameSite: 'none' as const,
-            secure: authBaseURL?.startsWith('https://') ?? false,
+            sameSite: isHttpsPreview ? ('none' as const) : ('lax' as const),
+            secure: isHttpsPreview,
           },
         }
       : {}),
