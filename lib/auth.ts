@@ -13,16 +13,18 @@ import { pool } from '@/lib/db'
  * mount path (`basePath`) from `baseURL`'s pathname, so using it would move
  * the handler off `/api/auth` and make every `/api/auth/*` request 404.
  */
+const authBaseURL =
+  process.env.BETTER_AUTH_URL ??
+  (process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : process.env.V0_RUNTIME_URL)
+
 export const auth = betterAuth({
   database: pool,
   secret: process.env.NEON_AUTH_COOKIE_SECRET,
-  baseURL:
-    process.env.BETTER_AUTH_URL ??
-    (process.env.VERCEL_PROJECT_PRODUCTION_URL
-      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-      : process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : process.env.V0_RUNTIME_URL),
+  baseURL: authBaseURL,
   emailAndPassword: {
     enabled: true,
     autoSignIn: true,
@@ -62,7 +64,7 @@ export const auth = betterAuth({
       ? {
           defaultCookieAttributes: {
             sameSite: 'none' as const,
-            secure: true,
+            secure: authBaseURL?.startsWith('https://') ?? false,
           },
         }
       : {}),
