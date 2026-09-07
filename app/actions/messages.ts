@@ -1,6 +1,6 @@
 'use server'
 
-import { and, desc, eq, isNull, or } from 'drizzle-orm'
+import { and, asc, desc, eq, isNull, or } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 import { auth } from '@/lib/auth'
@@ -141,6 +141,106 @@ export async function getConversations(): Promise<ConversationSummary[]> {
   })
 
   return summaries
+}
+
+export type ConversationMessage = {
+  id: string
+  body: string
+  // True when the signed-in user sent the message (render on the right).
+  mine: boolean
+  createdAt: string
+  readAt: string | null
+}
+
+export type ConversationDetail = {
+  person: {
+    userId: string
+    name: string
+    avatar: string
+    headline: string
+  }
+  messages: ConversationMessage[]
+}
+
+/**
+ * Full one-to-one conversation between the signed-in user and `otherUserId`:
+ * the other person's profile plus every message in the pair, oldest first.
+ *
+ * A conversation is the unordered pair, so it selects rows where the two users
+ * are (sender, recipient) in either direction. Reuses the existing
+ * `public.messages` table and the same accepted-connection gate as
+ * `sendMessage`, so only real connections are viewable. Returns null when the
+ * pair is not an accepted connection or the person has no profile — never fake
+ * data. Read-only: it performs no mutation (marking read is a separate action).
+ */
+export async function getConversation(
+  otherUserId: string,
+): Promise<ConversationDetail | null> {
+  const meId = await getUserId()
+  if (!otherUserId || otherUserId === meId) return null
+  await ensureMessagesTable()
+
+  const [connected] = await db
+    .select({ id: connections.id })
+    .from(connections)
+    .where(
+      and(
+        eq(connections.status, 'accepted'),
+        or(
+          and(
+            eq(connections.requesterId, meId),
+            eq(connections.recipientId, otherUserId),
+          ),
+          and(
+            eq(connections.requesterId, otherUserId),
+            eq(connections.recipientId, meId),
+          ),
+        ),
+      ),
+    )
+    .limit(1)
+  if (!connected) return null
+
+  const [person] = await db
+    .select(PERSON_COLUMNS)
+    .from(profiles)
+    .leftJoin(user, eq(user.id, profiles.userId))
+    .where(eq(profiles.userId, otherUserId))
+    .limit(1)
+  if (!person) return null
+
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(
+      or(
+        and(
+          eq(messages.senderId, meId),
+          eq(messages.recipientId, otherUserId),
+        ),
+        and(
+          eq(messages.senderId, otherUserId),
+          eq(messages.recipientId, meId),
+        ),
+      ),
+    )
+    .orderBy(asc(messages.createdAt))
+
+  return {
+    person: {
+      userId: person.userId,
+      name: person.name ?? 'Aspira member',
+      avatar: person.avatar ?? person.image ?? '',
+      headline: person.headline ?? '',
+    },
+    messages: rows.map((m) => ({
+      id: m.id,
+      body: m.body,
+      mine: m.senderId === meId,
+      createdAt: m.createdAt.toISOString(),
+      readAt: m.readAt ? m.readAt.toISOString() : null,
+    })),
+  }
 }
 
 /**
