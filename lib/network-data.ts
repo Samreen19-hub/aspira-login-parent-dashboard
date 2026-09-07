@@ -21,6 +21,9 @@ export type NetworkPerson = {
   // row id used to accept/decline an incoming request.
   relationshipStatus?: RelationshipStatus
   connectionId?: string
+  // Whether the viewer already follows this person. Drives the Follow/Following
+  // toggle and is independent of `relationshipStatus` (follow ≠ connection).
+  isFollowing?: boolean
 }
 
 export const NETWORK_STATS = {

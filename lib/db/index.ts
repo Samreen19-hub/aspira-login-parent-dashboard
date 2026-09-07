@@ -22,3 +22,35 @@ pool.on('connect', (client) => {
 })
 
 export const db = drizzle(pool, { schema })
+
+/**
+ * Lazily provisions the `public.follows` table (and its unique-pair index) on
+ * the live database using the shared pool. No follow structure existed in the
+ * schema, so the app owns its minimal DDL here — idempotent (`IF NOT EXISTS`),
+ * memoized per process, and explicitly schema-qualified so it always lands in
+ * `public` rather than the first entry (`neon_auth`) of the `search_path`.
+ */
+let followsReady: Promise<void> | null = null
+export function ensureFollowsTable(): Promise<void> {
+  if (!followsReady) {
+    followsReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.follows (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          follower_id uuid NOT NULL,
+          following_id uuid NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS follows_unique_pair
+        ON public.follows (follower_id, following_id)
+      `)
+    })().catch((error) => {
+      // Reset so a transient failure can be retried on the next call.
+      followsReady = null
+      throw error
+    })
+  }
+  return followsReady
+}
