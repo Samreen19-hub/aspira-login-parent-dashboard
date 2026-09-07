@@ -25,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useAuth } from '@/lib/auth-context'
+import { useMessagesStore } from '@/components/parent/messages-store'
 import { PARENT_PROFILE } from '@/lib/parent-data'
 import { cn } from '@/lib/utils'
 
@@ -39,6 +40,16 @@ export function ParentTopNav() {
   const pathname = usePathname()
   const router = useRouter()
   const { user, logout } = useAuth()
+  // Live unread-message count for the Messages icon badge; polled by the store for near-real-time
+  // updates. Only messages where the signed-in user is the recipient are counted.
+  const { unreadCount } = useMessagesStore()
+
+  // Resolve the badge shown on each nav item: Messages is the live unread count (hidden at 0),
+  // while other items keep their static badge.
+  function badgeFor(item: (typeof NAV)[number]) {
+    if (item.href === '/parent/messages') return unreadCount > 0 ? unreadCount : undefined
+    return item.badge
+  }
 
   function handleLogout() {
     logout()
@@ -66,6 +77,7 @@ export function ParentTopNav() {
           {NAV.map((item) => {
             const active = pathname === item.href
             const Icon = item.icon
+            const badge = badgeFor(item)
             return (
               <Link
                 key={item.href}
@@ -78,9 +90,9 @@ export function ParentTopNav() {
               >
                 <span className="relative">
                   <Icon className="size-5" />
-                  {item.badge && (
+                  {badge && (
                     <span className="absolute -right-2 -top-1.5 flex size-4 items-center justify-center rounded-full bg-destructive text-[9px] font-bold text-white">
-                      {item.badge}
+                      {badge}
                     </span>
                   )}
                 </span>
@@ -151,12 +163,13 @@ export function ParentTopNav() {
             <DropdownMenuContent align="end" className="w-48">
               {NAV.map((item) => {
                 const Icon = item.icon
+                const badge = badgeFor(item)
                 return (
                   <DropdownMenuItem key={item.href} render={<Link href={item.href} />}>
                     <Icon className="size-4" /> {item.label}
-                    {item.badge && (
+                    {badge && (
                       <span className="ml-auto rounded-full bg-destructive px-1.5 text-[10px] font-bold text-white">
-                        {item.badge}
+                        {badge}
                       </span>
                     )}
                   </DropdownMenuItem>

@@ -4,8 +4,8 @@ import { and, eq, ne, notInArray, or } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 import { auth } from '@/lib/auth'
-import { db } from '@/lib/db'
-import { connections, profiles, user } from '@/lib/db/schema'
+import { db, ensureFollowsTable } from '@/lib/db'
+import { connections, follows, profiles, user } from '@/lib/db/schema'
 import type { NetworkPerson, RelationshipStatus } from '@/lib/network-data'
 
 /**
@@ -79,6 +79,8 @@ const PERSON_COLUMNS = {
 export async function getDiscoverPeople(): Promise<NetworkPerson[]> {
   const meId = await getUserId()
 
+  await ensureFollowsTable()
+
   const myConnections = await db
     .select()
     .from(connections)
@@ -107,6 +109,14 @@ export async function getDiscoverPeople(): Promise<NetworkPerson[]> {
     .leftJoin(user, eq(user.id, profiles.userId))
     .where(discoverWhere)
 
+  // People I follow — annotated onto Discover cards. A follow never removes a
+  // person from Discover, so this only toggles the Follow/Following button.
+  const myFollowing = await db
+    .select({ id: follows.followingId })
+    .from(follows)
+    .where(eq(follows.followerId, meId))
+  const followingSet = new Set(myFollowing.map((row) => row.id))
+
   // Map otherUserId -> relationship info for O(1) lookup while projecting.
   const byOther = new Map<
     string,
@@ -132,8 +142,115 @@ export async function getDiscoverPeople(): Promise<NetworkPerson[]> {
     return toPerson(row, {
       relationshipStatus: rel?.status ?? 'none',
       connectionId: rel && rel.status !== 'none' ? rel.connectionId : undefined,
+      isFollowing: followingSet.has(row.userId),
     })
   })
+}
+
+/**
+ * The signed-in user's Following list: real users they follow, newest first.
+ * Every returned person is followed by definition, so `isFollowing` is true.
+ */
+export async function getFollowing(): Promise<NetworkPerson[]> {
+  const meId = await getUserId()
+  await ensureFollowsTable()
+
+  const rows = await db
+    .select({ ...PERSON_COLUMNS, followedAt: follows.createdAt })
+    .from(follows)
+    .innerJoin(profiles, eq(profiles.userId, follows.followingId))
+    .leftJoin(user, eq(user.id, profiles.userId))
+    .where(eq(follows.followerId, meId))
+
+  return rows.map((row) =>
+    toPerson(row, { isFollowing: true, connectedAt: row.followedAt?.toISOString() }),
+  )
+}
+
+/**
+ * The signed-in user's Followers list: real users who follow them. Each person
+ * is annotated with `isFollowing` so the card can show Follow back / Following.
+ */
+export async function getFollowers(): Promise<NetworkPerson[]> {
+  const meId = await getUserId()
+  await ensureFollowsTable()
+
+  const rows = await db
+    .select({ ...PERSON_COLUMNS, followedAt: follows.createdAt })
+    .from(follows)
+    .innerJoin(profiles, eq(profiles.userId, follows.followerId))
+    .leftJoin(user, eq(user.id, profiles.userId))
+    .where(eq(follows.followingId, meId))
+
+  const iFollow = await db
+    .select({ id: follows.followingId })
+    .from(follows)
+    .where(eq(follows.followerId, meId))
+  const iFollowSet = new Set(iFollow.map((row) => row.id))
+
+  return rows.map((row) =>
+    toPerson(row, {
+      isFollowing: iFollowSet.has(row.userId),
+      connectedAt: row.followedAt?.toISOString(),
+    }),
+  )
+}
+
+/**
+ * Follow `targetUserId` from the signed-in user. Immediate and one-way — it
+ * never creates or touches a `connections` row. Self-follows are rejected, the
+ * target must be a real user, and the unique-pair index makes repeat follows a
+ * no-op rather than a duplicate.
+ */
+export async function followUser(targetUserId: string): Promise<void> {
+  const meId = await getUserId()
+  if (!targetUserId || typeof targetUserId !== 'string') {
+    throw new Error('A valid person is required.')
+  }
+  if (targetUserId === meId) {
+    throw new Error('You cannot follow yourself.')
+  }
+
+  await ensureFollowsTable()
+
+  const [target] = await db
+    .select({ id: user.id })
+    .from(user)
+    .where(eq(user.id, targetUserId))
+    .limit(1)
+  if (!target) throw new Error('That person could not be found.')
+
+  try {
+    await db
+      .insert(follows)
+      .values({ followerId: meId, followingId: targetUserId })
+  } catch {
+    // Unique-pair index caught a race / repeat follow: already following.
+  }
+
+  revalidateNetwork()
+}
+
+/**
+ * Unfollow `targetUserId`. Deletes only the signed-in user's directional follow
+ * row, leaving any reverse follow and any connection intact.
+ */
+export async function unfollowUser(targetUserId: string): Promise<void> {
+  const meId = await getUserId()
+  if (!targetUserId) throw new Error('A valid person is required.')
+
+  await ensureFollowsTable()
+
+  await db
+    .delete(follows)
+    .where(
+      and(
+        eq(follows.followerId, meId),
+        eq(follows.followingId, targetUserId),
+      ),
+    )
+
+  revalidateNetwork()
 }
 
 /**

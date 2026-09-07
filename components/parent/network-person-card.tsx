@@ -40,19 +40,6 @@ const MUTUAL_AVATARS = ["/network/neha-sharma.png", "/network/rohan-mehta.png", 
 
 type Variant = "connection" | "following" | "follower" | "discover"
 
-function primaryLabel(variant: Variant) {
-  switch (variant) {
-    case "following":
-      return "Following"
-    case "follower":
-      return "Follow back"
-    case "discover":
-      return "Connect"
-    default:
-      return "Message"
-  }
-}
-
 export function NetworkPersonCard({
   person,
   variant = "connection",
@@ -61,14 +48,18 @@ export function NetworkPersonCard({
   variant?: Variant
 }) {
   const router = useRouter()
-  const { removeConnection, sendRequest } = useNetworkStore()
+  const { removeConnection, sendRequest, follow, unfollow } = useNetworkStore()
   const [shareOpen, setShareOpen] = useState(false)
   const [requestSubmitting, setRequestSubmitting] = useState(false)
   const [requestError, setRequestError] = useState<string | null>(null)
+  const [followSubmitting, setFollowSubmitting] = useState(false)
+  const [followError, setFollowError] = useState<string | null>(null)
   const [removeOpen, setRemoveOpen] = useState(false)
   const [copied, setCopied] = useState(false)
 
-  const isFollowing = variant === "following"
+  // People in the Following tab are followed by definition; everywhere else the server tells us via
+  // `person.isFollowing`. Drives the Follow/Following toggle independently of connection state.
+  const isFollowingPerson = variant === "following" || Boolean(person.isFollowing)
   const relationshipStatus = person.relationshipStatus ?? "none"
   const profileHref = personProfileHref(person.id, "/parent/network")
   // Absolute URL for the share dialog; falls back to the app path during SSR.
@@ -92,6 +83,23 @@ export function NetworkPersonCard({
       setRequestError(error instanceof Error ? error.message : "Could not send the connection request.")
     } finally {
       setRequestSubmitting(false)
+    }
+  }
+
+  async function toggleFollow() {
+    if (followSubmitting) return
+    setFollowSubmitting(true)
+    setFollowError(null)
+    try {
+      if (isFollowingPerson) {
+        await unfollow(person.id)
+      } else {
+        await follow(person.id)
+      }
+    } catch (error) {
+      setFollowError(error instanceof Error ? error.message : "Could not update follow status.")
+    } finally {
+      setFollowSubmitting(false)
     }
   }
 
@@ -186,42 +194,87 @@ export function NetworkPersonCard({
         <span className="text-xs text-muted-foreground">{person.mutualConnections} mutual connections</span>
       </div>
 
-      {requestError && variant === "discover" && (
+      {(requestError || followError) && (
         <p className="mt-3 text-xs text-destructive" role="alert">
-          {requestError}
+          {requestError ?? followError}
         </p>
       )}
 
       <div className="mt-4 flex w-full items-center gap-2">
-        <Button
-          variant="outline"
-          onClick={
-            variant === "discover"
-              ? relationshipStatus === "none"
-                ? connectPerson
+        {variant === "discover" ? (
+          <>
+            <Button
+              variant="outline"
+              onClick={
+                relationshipStatus === "none"
+                  ? connectPerson
+                  : relationshipStatus === "pending_incoming"
+                    ? () => router.push("/parent/network/requests")
+                    : relationshipStatus === "connected"
+                      ? messagePerson
+                      : undefined
+              }
+              disabled={requestSubmitting || relationshipStatus === "pending_outgoing"}
+              className="flex-1 gap-1.5 rounded-lg text-brand hover:text-brand"
+            >
+              {requestSubmitting ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : relationshipStatus === "none" ? (
+                <UserRoundPlus className="size-4" />
+              ) : relationshipStatus === "connected" ? (
+                <Check className="size-4" />
+              ) : null}
+              {relationshipStatus === "pending_outgoing"
+                ? "Request Sent"
                 : relationshipStatus === "pending_incoming"
-                  ? () => router.push("/parent/network/requests")
+                  ? "Respond"
                   : relationshipStatus === "connected"
-                    ? messagePerson
-                    : undefined
-              : variant === "connection"
-                ? messagePerson
-                : viewProfile
-          }
-          disabled={variant === "discover" && (requestSubmitting || relationshipStatus === "pending_outgoing")}
-          className="flex-1 gap-1.5 rounded-lg text-brand hover:text-brand"
-        >
-          {requestSubmitting ? <Loader2 className="size-4 animate-spin" /> : relationshipStatus === "none" && variant === "discover" ? <UserRoundPlus className="size-4" /> : isFollowing ? <UserRoundCheck className="size-4" /> : relationshipStatus === "connected" ? <Check className="size-4" /> : null}
-          {variant === "discover"
-            ? relationshipStatus === "pending_outgoing"
-              ? "Request Sent"
-              : relationshipStatus === "pending_incoming"
-                ? "Respond"
-                : relationshipStatus === "connected"
-                  ? "Connected"
-                  : "Connect"
-            : primaryLabel(variant)}
-        </Button>
+                    ? "Connected"
+                    : "Connect"}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={toggleFollow}
+              disabled={followSubmitting}
+              aria-pressed={isFollowingPerson}
+              className="flex-1 gap-1.5 rounded-lg"
+            >
+              {followSubmitting ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : isFollowingPerson ? (
+                <UserRoundCheck className="size-4" />
+              ) : (
+                <UserRoundPlus className="size-4" />
+              )}
+              {isFollowingPerson ? "Following" : "Follow"}
+            </Button>
+          </>
+        ) : variant === "connection" ? (
+          <Button
+            variant="outline"
+            onClick={messagePerson}
+            className="flex-1 gap-1.5 rounded-lg text-brand hover:text-brand"
+          >
+            Message
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            onClick={toggleFollow}
+            disabled={followSubmitting}
+            aria-pressed={isFollowingPerson}
+            className="flex-1 gap-1.5 rounded-lg"
+          >
+            {followSubmitting ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : isFollowingPerson ? (
+              <UserRoundCheck className="size-4" />
+            ) : (
+              <UserRoundPlus className="size-4" />
+            )}
+            {isFollowingPerson ? "Following" : "Follow back"}
+          </Button>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
