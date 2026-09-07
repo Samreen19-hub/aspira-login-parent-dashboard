@@ -1,12 +1,14 @@
 "use client"
 
 import { useState } from "react"
-import { MessageCircle } from "lucide-react"
+import { MessageCircle, Users, UserPlus } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { useMessagesStore } from "@/components/parent/messages-store"
+import { useMessagesStore, type InboxItem } from "@/components/parent/messages-store"
 import { ConversationView } from "@/components/parent/conversation-view"
-import type { ConversationSummary } from "@/app/actions/messages"
+import { GroupConversationView } from "@/components/parent/group-conversation-view"
+import { CreateGroupDialog } from "@/components/parent/create-group-dialog"
 import { cn } from "@/lib/utils"
 
 function initialsOf(name: string) {
@@ -18,6 +20,12 @@ function initialsOf(name: string) {
       .join("")
       .toUpperCase() || "A"
   )
+}
+
+// A stable key for the selected row that distinguishes a direct conversation
+// (keyed by the other user's id) from a group (keyed by conversation id).
+function keyOf(item: InboxItem) {
+  return `${item.kind}:${item.id}`
 }
 
 // Renders the message time the way inboxes do: a clock time for today, "Yesterday" for the previous
@@ -40,11 +48,11 @@ function formatTimestamp(iso: string | null) {
 
 export function MessagesView() {
   const { conversations, isLoading, error } = useMessagesStore()
-  // The currently open one-to-one conversation. On desktop the list and the
-  // conversation are shown side by side; on mobile the conversation replaces the
-  // list until the user goes Back.
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const selected = conversations.find((conversation) => conversation.userId === selectedId) ?? null
+  // The currently open conversation, identified by its composite key. On desktop the list and the
+  // conversation are shown side by side; on mobile the conversation replaces the list until Back.
+  const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
+  const selected = conversations.find((conversation) => keyOf(conversation) === selectedKey) ?? null
 
   return (
     <div className="mx-auto flex h-[calc(100svh-7rem)] max-w-[1200px] flex-col">
@@ -52,14 +60,19 @@ export function MessagesView() {
         <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-brand-muted text-brand">
           <MessageCircle className="size-6" />
         </span>
-        <div>
+        <div className="min-w-0 flex-1">
           <h1 className="font-display text-2xl font-bold text-foreground text-balance">Messages</h1>
           <p className="text-sm text-muted-foreground">Your conversations with connected families.</p>
         </div>
+        <Button onClick={() => setCreateOpen(true)} className="shrink-0 gap-2">
+          <UserPlus className="size-4" />
+          <span className="hidden sm:inline">New group</span>
+          <span className="sm:hidden">Group</span>
+        </Button>
       </div>
 
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[360px_1fr]">
-        {/* LEFT COLUMN — the existing inbox list, now selectable. */}
+        {/* LEFT COLUMN — the inbox list (direct + group), now selectable. */}
         <aside className={cn("min-h-0 flex-col", selected ? "hidden lg:flex" : "flex")}>
           <div className="min-h-0 flex-1 overflow-y-auto rounded-xl">
             {isLoading ? (
@@ -88,18 +101,18 @@ export function MessagesView() {
                 </span>
                 <p className="font-display text-lg font-semibold text-foreground">No conversations yet</p>
                 <p className="max-w-sm text-sm text-muted-foreground">
-                  Connect with families in your Network and they&apos;ll show up here so you can start a
-                  conversation.
+                  Connect with families in your Network and they&apos;ll show up here, or start a group with
+                  New group.
                 </p>
               </Card>
             ) : (
               <ul className="grid gap-2">
                 {conversations.map((conversation) => (
                   <ConversationRow
-                    key={conversation.userId}
+                    key={keyOf(conversation)}
                     conversation={conversation}
-                    isActive={conversation.userId === selectedId}
-                    onSelect={() => setSelectedId(conversation.userId)}
+                    isActive={keyOf(conversation) === selectedKey}
+                    onSelect={() => setSelectedKey(keyOf(conversation))}
                   />
                 ))}
               </ul>
@@ -107,16 +120,25 @@ export function MessagesView() {
           </div>
         </aside>
 
-        {/* RIGHT COLUMN — the active one-to-one conversation. */}
+        {/* RIGHT COLUMN — the active conversation (direct or group). */}
         <section className={cn("min-h-0", selected ? "block" : "hidden lg:block")}>
           {selected ? (
-            <ConversationView
-              key={selected.userId}
-              otherUserId={selected.userId}
-              fallbackName={selected.name}
-              fallbackAvatar={selected.avatar}
-              onBack={() => setSelectedId(null)}
-            />
+            selected.kind === "group" ? (
+              <GroupConversationView
+                key={keyOf(selected)}
+                conversationId={selected.id}
+                fallbackName={selected.name}
+                onBack={() => setSelectedKey(null)}
+              />
+            ) : (
+              <ConversationView
+                key={keyOf(selected)}
+                otherUserId={selected.id}
+                fallbackName={selected.name}
+                fallbackAvatar={selected.avatar}
+                onBack={() => setSelectedKey(null)}
+              />
+            )
           ) : (
             <div className="grid h-full place-items-center rounded-xl border border-border/70 bg-card p-10 text-center">
               <div className="grid justify-items-center gap-2">
@@ -125,13 +147,19 @@ export function MessagesView() {
                 </span>
                 <p className="font-display text-lg font-semibold text-foreground">Select a conversation</p>
                 <p className="max-w-xs text-sm text-muted-foreground">
-                  Choose a connected family from the list to view your messages and reply.
+                  Choose a conversation from the list to view your messages and reply.
                 </p>
               </div>
             </div>
           )}
         </section>
       </div>
+
+      <CreateGroupDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={(conversationId) => setSelectedKey(`group:${conversationId}`)}
+      />
     </div>
   )
 }
@@ -141,17 +169,37 @@ function ConversationRow({
   isActive,
   onSelect,
 }: {
-  conversation: ConversationSummary
+  conversation: InboxItem
   isActive: boolean
   onSelect: () => void
 }) {
-  const { name, avatar, headline, lastMessage, lastMessageAt, lastMessageMine, unreadCount } =
-    conversation
+  const {
+    kind,
+    name,
+    avatar,
+    headline,
+    lastMessage,
+    lastMessageAt,
+    lastMessageMine,
+    lastMessageSenderName,
+    unreadCount,
+  } = conversation
   const hasUnread = unreadCount > 0
+  const isGroup = kind === "group"
 
-  const preview = lastMessage
-    ? `${lastMessageMine ? "You: " : ""}${lastMessage}`
-    : headline || "You're connected — say hello"
+  // Preview text. Groups prefix the sender's first name (or "You:"); direct rows
+  // keep the existing "You:"/plain preview and fall back to the headline.
+  let preview: string
+  if (lastMessage) {
+    const prefix = lastMessageMine
+      ? "You: "
+      : isGroup && lastMessageSenderName
+        ? `${lastMessageSenderName}: `
+        : ""
+    preview = `${prefix}${lastMessage}`
+  } else {
+    preview = isGroup ? headline || "New group — say hello" : headline || "You're connected — say hello"
+  }
 
   return (
     <li>
@@ -168,20 +216,34 @@ function ConversationRow({
               : "border-border/70 bg-card hover:bg-muted/60",
         )}
       >
-        <Avatar className="size-11 shrink-0">
-          <AvatarImage src={avatar || "/placeholder.svg"} alt="" />
-          <AvatarFallback>{initialsOf(name)}</AvatarFallback>
-        </Avatar>
+        {isGroup ? (
+          <span
+            className="grid size-11 shrink-0 place-items-center rounded-full bg-brand-muted text-brand"
+            aria-hidden="true"
+          >
+            <Users className="size-5" />
+          </span>
+        ) : (
+          <Avatar className="size-11 shrink-0">
+            <AvatarImage src={avatar || "/placeholder.svg"} alt="" />
+            <AvatarFallback>{initialsOf(name)}</AvatarFallback>
+          </Avatar>
+        )}
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-3">
             <p
               className={cn(
-                "truncate text-sm",
+                "flex min-w-0 items-center gap-1.5 truncate text-sm",
                 hasUnread ? "font-bold text-foreground" : "font-semibold text-foreground",
               )}
             >
-              {name}
+              {isGroup && (
+                <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Group
+                </span>
+              )}
+              <span className="truncate">{name}</span>
             </p>
             <span className="shrink-0 text-xs text-muted-foreground">{formatTimestamp(lastMessageAt)}</span>
           </div>

@@ -82,8 +82,46 @@ export const follows = pgTable('follows', {
 export const messages = pgTable('messages', {
   id: uuid('id').primaryKey().defaultRandom(),
   senderId: uuid('sender_id').notNull(),
-  recipientId: uuid('recipient_id').notNull(),
+  // Nullable now that group messages exist: a group message targets a
+  // `conversation_id` and has no single recipient. Direct messages still set
+  // `recipient_id` exactly as before, so their behavior is unchanged.
+  recipientId: uuid('recipient_id'),
+  // Null for direct messages (the pair itself is the conversation); set for
+  // group messages to the owning `public.conversations` row.
+  conversationId: uuid('conversation_id'),
   body: text('body').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   readAt: timestamp('read_at', { withTimezone: true }),
+})
+
+/**
+ * Group (and, in principle, any multi-party) conversations (schema: public).
+ * Direct one-to-one chat does NOT use this table — it stays modeled purely by
+ * the sender/recipient pair on `public.messages`. A row here exists only for
+ * `type = 'group'` conversations created via the group UI. Provisioned lazily
+ * by `ensureGroupTables` (see `lib/db/index.ts`).
+ */
+export const conversations = pgTable('conversations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  type: text('type').notNull().default('group'),
+  name: text('name'),
+  createdBy: uuid('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * Membership of a `public.conversations` group. `last_read_at` holds the
+ * per-user read watermark for the group: unread group messages are those
+ * created after this timestamp and not sent by the user. This keeps group read
+ * state user-specific without touching the direct-message `read_at` column.
+ * Uniqueness of (conversation_id, user_id) is enforced by the
+ * `conversation_members_unique` index created in `ensureGroupTables`.
+ */
+export const conversationMembers = pgTable('conversation_members', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  conversationId: uuid('conversation_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  joinedAt: timestamp('joined_at', { withTimezone: true }).notNull().defaultNow(),
+  lastReadAt: timestamp('last_read_at', { withTimezone: true }),
 })
