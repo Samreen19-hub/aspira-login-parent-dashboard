@@ -54,3 +54,40 @@ export function ensureFollowsTable(): Promise<void> {
   }
   return followsReady
 }
+
+/**
+ * Lazily provisions the `public.messages` table (and supporting indexes) using
+ * the shared pool, following the same idempotent, memoized, schema-qualified
+ * pattern as `ensureFollowsTable`. Two indexes cover the hot paths: unread
+ * lookups by recipient and per-pair history ordered by time.
+ */
+let messagesReady: Promise<void> | null = null
+export function ensureMessagesTable(): Promise<void> {
+  if (!messagesReady) {
+    messagesReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.messages (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          sender_id uuid NOT NULL,
+          recipient_id uuid NOT NULL,
+          body text NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          read_at timestamptz
+        )
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS messages_recipient_unread
+        ON public.messages (recipient_id, read_at)
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS messages_pair_created
+        ON public.messages (sender_id, recipient_id, created_at)
+      `)
+    })().catch((error) => {
+      // Reset so a transient failure can be retried on the next call.
+      messagesReady = null
+      throw error
+    })
+  }
+  return messagesReady
+}

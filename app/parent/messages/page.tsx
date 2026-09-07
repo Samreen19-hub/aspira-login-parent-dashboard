@@ -1,2 +1,5 @@
-import { SectionMock } from "@/components/parent/section-mock"
-export default function MessagesPage() { return <SectionMock kind="messages" /> }
+import { MessagesView } from "@/components/parent/messages-view"
+
+export default function MessagesPage() {
+  return <MessagesView />
+}
