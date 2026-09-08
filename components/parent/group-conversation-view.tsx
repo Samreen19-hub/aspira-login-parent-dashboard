@@ -44,14 +44,24 @@ function formatMessageTime(iso: string) {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
 }
 
-// Stable per-sender tint so received messages in a group are easy to attribute.
+// Stable per-sender name tint, WhatsApp-style, so each group member's name is
+// visually distinct and easy to attribute. The colour is derived purely from
+// the member's `senderId`, so it is deterministic and never changes across
+// renders or when membership changes — the same person always keeps the same
+// colour (including the current user, if their name is ever shown). Each entry
+// pairs a readable light-mode shade with a lighter dark-mode shade so the name
+// stays accessible against the card background in either theme.
 const SENDER_TINTS = [
   "text-brand",
-  "text-emerald-600",
-  "text-violet-600",
-  "text-amber-600",
-  "text-rose-600",
-  "text-sky-600",
+  "text-emerald-600 dark:text-emerald-400",
+  "text-violet-600 dark:text-violet-400",
+  "text-amber-600 dark:text-amber-400",
+  "text-rose-600 dark:text-rose-400",
+  "text-sky-600 dark:text-sky-400",
+  "text-teal-600 dark:text-teal-400",
+  "text-fuchsia-600 dark:text-fuchsia-400",
+  "text-cyan-600 dark:text-cyan-400",
+  "text-orange-600 dark:text-orange-400",
 ]
 function tintFor(senderId: string) {
   let hash = 0

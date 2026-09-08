@@ -420,3 +420,40 @@ export async function markConversationRead(otherUserId: string): Promise<void> {
 
   revalidatePath('/parent/messages')
 }
+
+/**
+ * Permanently deletes the one-to-one conversation between the signed-in user
+ * and `otherUserId`: every DIRECT `public.messages` row in either direction
+ * (`conversation_id IS NULL`). It is scoped to exactly this pair, so no other
+ * conversation is touched, and the `conversation_id IS NULL` filter guarantees
+ * group messages can never match. It deliberately does NOT touch profiles, the
+ * `connections` row, or follows — the two users stay connected and can start a
+ * fresh direct chat afterwards via New Message.
+ */
+export async function deleteConversation(otherUserId: string): Promise<void> {
+  const meId = await getUserId()
+  if (!otherUserId || otherUserId === meId) {
+    throw new Error('A valid person is required.')
+  }
+  await ensureMessagesTable()
+
+  await db
+    .delete(messages)
+    .where(
+      and(
+        isNull(messages.conversationId),
+        or(
+          and(
+            eq(messages.senderId, meId),
+            eq(messages.recipientId, otherUserId),
+          ),
+          and(
+            eq(messages.senderId, otherUserId),
+            eq(messages.recipientId, meId),
+          ),
+        ),
+      ),
+    )
+
+  revalidatePath('/parent/messages')
+}

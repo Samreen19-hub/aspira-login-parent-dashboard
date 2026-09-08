@@ -2,10 +2,19 @@
 
 import { useEffect, useRef, useState, useTransition, type FormEvent, type KeyboardEvent } from "react"
 import useSWR from "swr"
-import { ArrowLeft, Send } from "lucide-react"
+import { ArrowLeft, Send, Trash2 } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  deleteConversation,
   getConversation,
   markConversationRead,
   sendMessage,
@@ -54,6 +63,9 @@ export function ConversationView({
   const [draft, setDraft] = useState("")
   const [isSending, startSending] = useTransition()
   const [sendError, setSendError] = useState<string | null>(null)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [isDeleting, startDeleting] = useTransition()
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const person = data?.person
   const messages = data?.messages ?? []
@@ -85,6 +97,27 @@ export function ConversationView({
       cancelled = true
     }
   }, [hasUnreadIncoming, otherUserId, mutate, refreshInbox])
+
+  // Delete only THIS 1-to-1 conversation's direct messages (server action is
+  // scoped to the pair), then close the panel and refresh the inbox so the row
+  // drops back to the normal Messages state. The connection is untouched, so
+  // the person stays reachable via New Message to start a fresh chat later.
+  function handleDelete() {
+    if (isDeleting) return
+    setDeleteError(null)
+    startDeleting(async () => {
+      try {
+        await deleteConversation(otherUserId)
+        setShowDeleteConfirm(false)
+        onBack()
+        refreshInbox()
+      } catch (error) {
+        setDeleteError(
+          error instanceof Error ? error.message : "Couldn't delete this conversation.",
+        )
+      }
+    })
+  }
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -127,13 +160,65 @@ export function ConversationView({
           <AvatarImage src={displayAvatar || "/placeholder.svg"} alt="" />
           <AvatarFallback>{initialsOf(displayName)}</AvatarFallback>
         </Avatar>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="truncate font-semibold text-foreground">{displayName}</p>
           {person?.headline && (
             <p className="truncate text-xs text-muted-foreground">{person.headline}</p>
           )}
         </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="shrink-0 rounded-xl text-muted-foreground hover:text-destructive"
+          onClick={() => {
+            setDeleteError(null)
+            setShowDeleteConfirm(true)
+          }}
+          aria-label={`Delete conversation with ${displayName}`}
+        >
+          <Trash2 className="size-4" />
+        </Button>
       </div>
+
+      <Dialog
+        open={showDeleteConfirm}
+        onOpenChange={(open) => !isDeleting && setShowDeleteConfirm(open)}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-display">
+              <span className="grid size-8 place-items-center rounded-xl bg-destructive/10 text-destructive">
+                <Trash2 className="size-4" />
+              </span>
+              Delete conversation
+            </DialogTitle>
+            <DialogDescription>
+              This permanently deletes your message history with {displayName}. This can&apos;t be
+              undone. You&apos;ll stay connected, so you can start a new chat anytime — and your other
+              conversations and groups aren&apos;t affected.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && <p className="text-xs font-medium text-destructive">{deleteError}</p>}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setShowDeleteConfirm(false)}
+              disabled={isDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={isDeleting}
+            >
+              {isDeleting ? "Deleting…" : "Delete conversation"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="flex-1 space-y-2 overflow-y-auto p-4">
         {isLoading && !data ? (
