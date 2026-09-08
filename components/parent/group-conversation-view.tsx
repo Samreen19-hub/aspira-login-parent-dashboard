@@ -2,15 +2,26 @@
 
 import { useEffect, useRef, useState, useTransition, type FormEvent, type KeyboardEvent } from "react"
 import useSWR from "swr"
-import { ArrowLeft, Send, Users } from "lucide-react"
+import { ArrowLeft, Send, Trash2, UserMinus, UserPlus, Users } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  deleteGroup,
   getGroupConversation,
   markGroupRead,
+  removeGroupMember,
   sendGroupMessage,
   type GroupMessage,
 } from "@/app/actions/groups"
+import { AddMembersDialog } from "@/components/parent/add-members-dialog"
 import { useMessagesStore } from "@/components/parent/messages-store"
 import { cn } from "@/lib/utils"
 
@@ -68,11 +79,52 @@ export function GroupConversationView({
   const [isSending, startSending] = useTransition()
   const [sendError, setSendError] = useState<string | null>(null)
   const [showMembers, setShowMembers] = useState(false)
+  const [showAddMembers, setShowAddMembers] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [isDeleting, startDeleting] = useTransition()
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [removingId, setRemovingId] = useState<string | null>(null)
+  const [removeError, setRemoveError] = useState<string | null>(null)
 
   const conversation = data?.conversation
   const messages = data?.messages ?? []
   const displayName = conversation?.name ?? fallbackName
   const memberCount = conversation?.memberCount ?? 0
+  const viewerId = conversation?.viewerId ?? null
+  const viewerIsCreator = conversation?.viewerIsCreator ?? false
+
+  function handleRemoveMember(memberId: string) {
+    if (removingId) return
+    setRemoveError(null)
+    setRemovingId(memberId)
+    startDeleting(async () => {
+      try {
+        await removeGroupMember(conversationId, memberId)
+        await mutate()
+        refreshInbox()
+      } catch (error) {
+        setRemoveError(error instanceof Error ? error.message : "Couldn't remove that member.")
+      } finally {
+        setRemovingId(null)
+      }
+    })
+  }
+
+  function handleDeleteGroup() {
+    if (isDeleting) return
+    setDeleteError(null)
+    startDeleting(async () => {
+      try {
+        await deleteGroup(conversationId)
+        setShowDeleteConfirm(false)
+        // Return to the normal Messages state and drop the group from the list.
+        onBack()
+        refreshInbox()
+      } catch (error) {
+        setDeleteError(error instanceof Error ? error.message : "Couldn't delete this group.")
+      }
+    })
+  }
 
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -147,7 +199,44 @@ export function GroupConversationView({
             {memberCount} {memberCount === 1 ? "member" : "members"}
           </button>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="shrink-0 gap-1.5 rounded-xl"
+          onClick={() => setShowAddMembers(true)}
+        >
+          <UserPlus className="size-4" />
+          <span className="hidden sm:inline">Add members</span>
+        </Button>
+        {viewerIsCreator && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0 gap-1.5 rounded-xl text-destructive hover:text-destructive"
+            onClick={() => {
+              setDeleteError(null)
+              setShowDeleteConfirm(true)
+            }}
+          >
+            <Trash2 className="size-4" />
+            <span className="hidden sm:inline">Delete group</span>
+          </Button>
+        )}
       </div>
+
+      {conversation && (
+        <AddMembersDialog
+          conversationId={conversationId}
+          groupName={displayName}
+          open={showAddMembers}
+          onOpenChange={setShowAddMembers}
+          onAdded={() => {
+            // Refresh this conversation (member list/count) and the inbox row.
+            mutate()
+            refreshInbox()
+          }}
+        />
+      )}
 
       {showMembers && conversation && (
         <div className="border-b border-border/70 bg-muted/40 p-3">
@@ -155,21 +244,77 @@ export function GroupConversationView({
             Members
           </p>
           <ul className="flex flex-wrap gap-2">
-            {conversation.members.map((member) => (
-              <li
-                key={member.userId}
-                className="flex items-center gap-1.5 rounded-full bg-card py-1 pl-1 pr-2.5 text-xs font-medium text-foreground"
-              >
-                <Avatar className="size-5">
-                  <AvatarImage src={member.avatar || "/placeholder.svg"} alt="" />
-                  <AvatarFallback className="text-[9px]">{initialsOf(member.name)}</AvatarFallback>
-                </Avatar>
-                {member.name}
-              </li>
-            ))}
+            {conversation.members.map((member) => {
+              const isSelf = member.userId === viewerId
+              return (
+                <li
+                  key={member.userId}
+                  className="flex items-center gap-1.5 rounded-full bg-card py-1 pl-1 pr-1.5 text-xs font-medium text-foreground"
+                >
+                  <Avatar className="size-5">
+                    <AvatarImage src={member.avatar || "/placeholder.svg"} alt="" />
+                    <AvatarFallback className="text-[9px]">{initialsOf(member.name)}</AvatarFallback>
+                  </Avatar>
+                  <span className="pl-0.5">
+                    {member.name}
+                    {isSelf && <span className="text-muted-foreground"> (you)</span>}
+                  </span>
+                  {!isSelf && (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveMember(member.userId)}
+                      disabled={removingId !== null}
+                      className="grid size-4 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive disabled:opacity-50"
+                      aria-label={`Remove ${member.name} from the group`}
+                    >
+                      <UserMinus className="size-3" />
+                    </button>
+                  )}
+                </li>
+              )
+            })}
           </ul>
+          {removeError && <p className="mt-2 text-xs font-medium text-destructive">{removeError}</p>}
         </div>
       )}
+
+      <Dialog open={showDeleteConfirm} onOpenChange={(open) => !isDeleting && setShowDeleteConfirm(open)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-display">
+              <span className="grid size-8 place-items-center rounded-xl bg-destructive/10 text-destructive">
+                <Trash2 className="size-4" />
+              </span>
+              Delete group
+            </DialogTitle>
+            <DialogDescription>
+              This permanently deletes {'"'}
+              {displayName}
+              {'"'} and all of its messages for everyone. This can&apos;t be undone. Your direct messages
+              and other groups aren&apos;t affected.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && <p className="text-xs font-medium text-destructive">{deleteError}</p>}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setShowDeleteConfirm(false)}
+              disabled={isDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleDeleteGroup}
+              disabled={isDeleting}
+            >
+              {isDeleting ? "Deleting…" : "Delete group"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="flex-1 space-y-2 overflow-y-auto p-4">
         {isLoading && !data ? (
