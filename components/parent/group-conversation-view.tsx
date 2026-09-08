@@ -377,8 +377,12 @@ function GroupBubble({ message, showSender }: { message: GroupMessage; showSende
   return (
     <div className={cn("flex flex-col", message.mine ? "items-end" : "items-start")}>
       {showSender && (
-        <span className={cn("mb-0.5 ml-1 text-xs font-semibold", tintFor(message.senderId))}>
-          {message.senderName}
+        
+          <span
+  className="mb-0.5 ml-1 text-xs font-semibold"
+  style={{ color: senderColor(message.senderId) }}
+        >
+        {message.senderName}
         </span>
       )}
       <div
