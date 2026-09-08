@@ -58,7 +58,15 @@ export function MessagesView({ initialUserId }: { initialUserId?: string }) {
   )
   const [createOpen, setCreateOpen] = useState(false)
   const [newMessageOpen, setNewMessageOpen] = useState(false)
+
+  // The matching inbox row, if one exists. It may be absent even while a
+  // conversation is open: arriving via ?to=<userId> or picking someone in New
+  // Message selects a person who has no messages yet, so they are not in the
+  // inbox. We therefore drive the open panel off `selectedKey` itself and use
+  // this row (when present) only for fallback name/avatar.
   const selected = conversations.find((conversation) => keyOf(conversation) === selectedKey) ?? null
+  const selectedDirectId = selectedKey?.startsWith("direct:") ? selectedKey.slice("direct:".length) : null
+  const selectedGroupId = selectedKey?.startsWith("group:") ? selectedKey.slice("group:".length) : null
 
   return (
     <div className="mx-auto flex h-[calc(100svh-7rem)] max-w-[1200px] flex-col">
@@ -88,7 +96,7 @@ export function MessagesView({ initialUserId }: { initialUserId?: string }) {
 
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[360px_1fr]">
         {/* LEFT COLUMN — the inbox list (direct + group), now selectable. */}
-        <aside className={cn("min-h-0 flex-col", selected ? "hidden lg:flex" : "flex")}>
+        <aside className={cn("min-h-0 flex-col", selectedKey ? "hidden lg:flex" : "flex")}>
           <div className="min-h-0 flex-1 overflow-y-auto rounded-xl">
             {isLoading ? (
               <div className="grid gap-2" aria-busy="true">
@@ -136,24 +144,27 @@ export function MessagesView({ initialUserId }: { initialUserId?: string }) {
         </aside>
 
         {/* RIGHT COLUMN — the active conversation (direct or group). */}
-        <section className={cn("min-h-0", selected ? "block" : "hidden lg:block")}>
-          {selected ? (
-            selected.kind === "group" ? (
-              <GroupConversationView
-                key={keyOf(selected)}
-                conversationId={selected.id}
-                fallbackName={selected.name}
-                onBack={() => setSelectedKey(null)}
-              />
-            ) : (
-              <ConversationView
-                key={keyOf(selected)}
-                otherUserId={selected.id}
-                fallbackName={selected.name}
-                fallbackAvatar={selected.avatar}
-                onBack={() => setSelectedKey(null)}
-              />
-            )
+        <section className={cn("min-h-0", selectedKey ? "block" : "hidden lg:block")}>
+          {selectedGroupId ? (
+            <GroupConversationView
+              key={selectedKey}
+              conversationId={selectedGroupId}
+              fallbackName={selected?.name ?? "Group"}
+              onBack={() => setSelectedKey(null)}
+            />
+          ) : selectedDirectId ? (
+            // Opens the existing conversation when there is one, otherwise an
+            // empty composer. ConversationView loads the real person from the
+            // server (getConversation), so the header/name are correct even
+            // when this person has no inbox row yet. Sending the first message
+            // makes the inbox row appear on the next refresh.
+            <ConversationView
+              key={selectedKey}
+              otherUserId={selectedDirectId}
+              fallbackName={selected?.name ?? ""}
+              fallbackAvatar={selected?.avatar ?? ""}
+              onBack={() => setSelectedKey(null)}
+            />
           ) : (
             <div className="grid h-full place-items-center rounded-xl border border-border/70 bg-card p-10 text-center">
               <div className="grid justify-items-center gap-2">

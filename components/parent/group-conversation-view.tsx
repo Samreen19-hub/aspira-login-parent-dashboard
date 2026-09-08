@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState, useTransition, type FormEvent, type KeyboardEvent } from "react"
+import { useEffect, useMemo, useRef, useState, useTransition, type FormEvent, type KeyboardEvent } from "react"
 import useSWR from "swr"
 import { ArrowLeft, Send, Trash2, UserMinus, UserPlus, Users } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -44,23 +44,46 @@ function formatMessageTime(iso: string) {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
 }
 
-// Stable per-sender name colour, WhatsApp-style, so each group member's name is
-// visually distinct and easy to attribute. The colour is applied as an inline
-// `style` (not a Tailwind class) so it is guaranteed to render and can never be
+// Fixed saturation/lightness that stays readable on both the light card (white)
+// and the dark card (near-black) for every hue. Applied as an inline `style`
+// (not a Tailwind class) so the colour is guaranteed to render and can never be
 // purged, merged away, or overridden by another `text-*` utility on the span.
-//
-// A curated set of evenly-spread, vivid hues at a fixed saturation/lightness
-// that stays readable on both the light card (white) and the dark card
-// (near-black). Hues are far apart so even adjacent members look different.
-const SENDER_HUES = [210, 145, 275, 25, 330, 190, 45, 300, 165, 0, 95, 255]
+const NAME_SATURATION = 65
+const NAME_LIGHTNESS = 45
+
+// Fallback colour for a sender who is NOT in the current member list (e.g. a
+// member who left but whose past messages remain). Uses a well-distributed
+// FNV-1a hash spread across the full hue circle. The previous implementation
+// hashed with a weak `*31` polynomial into a 12-entry array; real Aspira UUIDs
+// collapsed onto the same bucket, so every member's name rendered the same
+// green. FNV-1a over 360 hues avoids that bucket collapse.
 function senderColor(senderId: string) {
-  // Deterministic hash of the senderId → a fixed index into SENDER_HUES, so the
-  // same person always keeps the same colour across renders, membership
-  // changes, and refreshes (the current user included, if their name shows).
-  let hash = 0
-  for (let i = 0; i < senderId.length; i++) hash = (hash * 31 + senderId.charCodeAt(i)) >>> 0
-  const hue = SENDER_HUES[hash % SENDER_HUES.length]
-  return `hsl(${hue} 65% 45%)`
+  let hash = 0x811c9dc5
+  for (let i = 0; i < senderId.length; i++) {
+    hash ^= senderId.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  const hue = hash % 360
+  return `hsl(${hue} ${NAME_SATURATION}% ${NAME_LIGHTNESS}%)`
+}
+
+// Deterministic, maximally-separated colour per member. Sorting the member ids
+// gives a stable order regardless of query/render order, and spreading the hue
+// evenly around the circle by index guarantees adjacent members are visibly
+// different (3 members => hues 120deg apart) — something per-id hashing cannot
+// guarantee because of collisions. The same member keeps the same colour across
+// re-renders and refreshes as long as the membership set is unchanged. The
+// current user is included, so their own name gets a colour too.
+function buildMemberColors(memberIds: string[]): Map<string, string> {
+  const sorted = [...memberIds].sort()
+  const count = Math.max(sorted.length, 1)
+  const map = new Map<string, string>()
+  sorted.forEach((id, index) => {
+    // Offset the starting hue so the first member isn't pure red.
+    const hue = Math.round((210 + (index * 360) / count) % 360)
+    map.set(id, `hsl(${hue} ${NAME_SATURATION}% ${NAME_LIGHTNESS}%)`)
+  })
+  return map
 }
 
 export function GroupConversationView({
@@ -93,6 +116,16 @@ export function GroupConversationView({
   const conversation = data?.conversation
   const messages = data?.messages ?? []
   const displayName = conversation?.name ?? fallbackName
+
+  // Even-spread colour per current member, keyed by user id. Recomputed only
+  // when the member set changes. `colorFor` falls back to the hash-based colour
+  // for any sender no longer in the group (e.g. a removed member's old messages).
+  const memberIds = (conversation?.members ?? []).map((member) => member.userId).join(",")
+  const memberColors = useMemo(
+    () => buildMemberColors(memberIds ? memberIds.split(",") : []),
+    [memberIds],
+  )
+  const colorFor = (senderId: string) => memberColors.get(senderId) ?? senderColor(senderId)
   const memberCount = conversation?.memberCount ?? 0
   const viewerId = conversation?.viewerId ?? null
   const viewerIsCreator = conversation?.viewerIsCreator ?? false
@@ -341,7 +374,14 @@ export function GroupConversationView({
             // same person (received messages only).
             const previous = messages[index - 1]
             const showSender = !message.mine && previous?.senderId !== message.senderId
-            return <GroupBubble key={message.id} message={message} showSender={showSender} />
+            return (
+              <GroupBubble
+                key={message.id}
+                message={message}
+                showSender={showSender}
+                nameColor={colorFor(message.senderId)}
+              />
+            )
           })
         )}
         <div ref={bottomRef} />
@@ -373,16 +413,20 @@ export function GroupConversationView({
   )
 }
 
-function GroupBubble({ message, showSender }: { message: GroupMessage; showSender: boolean }) {
+function GroupBubble({
+  message,
+  showSender,
+  nameColor,
+}: {
+  message: GroupMessage
+  showSender: boolean
+  nameColor: string
+}) {
   return (
     <div className={cn("flex flex-col", message.mine ? "items-end" : "items-start")}>
       {showSender && (
-        
-          <span
-  className="mb-0.5 ml-1 text-xs font-semibold"
-  style={{ color: senderColor(message.senderId) }}
-        >
-        {message.senderName}
+        <span className="mb-0.5 ml-1 text-xs font-semibold" style={{ color: nameColor }}>
+          {message.senderName}
         </span>
       )}
       <div

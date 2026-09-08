@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo, useState } from "react"
+import useSWR from "swr"
 import { MessageCircle, Search } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
@@ -13,7 +14,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { useMessagesStore, type InboxItem } from "@/components/parent/messages-store"
+import { getConnections } from "@/app/actions/network"
 
 function initialsOf(name: string) {
   return (
@@ -26,12 +27,14 @@ function initialsOf(name: string) {
   )
 }
 
-// Starts a one-to-one message. The list of eligible people is the existing set of
-// accepted connections, which the Messages store already exposes as its `direct`
-// inbox items (connected people appear even before any message exists). Choosing a
-// person hands their user id back to the parent, which opens that person's existing
-// 1-to-1 conversation in the right-hand panel — reusing the conversation rather than
-// creating a duplicate. No new data layer, table, or connection logic is involved.
+// Starts a one-to-one message. The list of eligible people is the signed-in
+// user's ACCEPTED CONNECTIONS, read straight from the network system via
+// `getConnections()` — NOT from the Messages inbox. The inbox intentionally
+// contains only people with an actual message, so deriving from it would hide
+// connections you haven't messaged yet (exactly the people New Message is for).
+// Choosing a person hands their user id back to the parent, which opens that
+// person's conversation in the right-hand panel: an existing one is reused (no
+// duplicate), and a brand-new connection opens an empty composer.
 export function NewMessageDialog({
   open,
   onOpenChange,
@@ -41,13 +44,10 @@ export function NewMessageDialog({
   onOpenChange: (open: boolean) => void
   onSelect: (userId: string) => void
 }) {
-  const { conversations, isLoading } = useMessagesStore()
+  // Only fetch while the dialog is open; SWR caches so reopening is instant.
+  const { data, isLoading } = useSWR(open ? "new-message:connections" : null, getConnections)
+  const people = data ?? []
   const [query, setQuery] = useState("")
-
-  const people = useMemo(
-    () => conversations.filter((item): item is InboxItem => item.kind === "direct"),
-    [conversations],
-  )
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
