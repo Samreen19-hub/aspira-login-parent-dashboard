@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { MessageCircle, Users, UserPlus } from "lucide-react"
+import { MessageCircle, Users, UserPlus, PenSquare } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -9,6 +9,7 @@ import { useMessagesStore, type InboxItem } from "@/components/parent/messages-s
 import { ConversationView } from "@/components/parent/conversation-view"
 import { GroupConversationView } from "@/components/parent/group-conversation-view"
 import { CreateGroupDialog } from "@/components/parent/create-group-dialog"
+import { NewMessageDialog } from "@/components/parent/new-message-dialog"
 import { cn } from "@/lib/utils"
 
 function initialsOf(name: string) {
@@ -52,6 +53,7 @@ export function MessagesView() {
   // conversation are shown side by side; on mobile the conversation replaces the list until Back.
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
+  const [newMessageOpen, setNewMessageOpen] = useState(false)
   const selected = conversations.find((conversation) => keyOf(conversation) === selectedKey) ?? null
 
   return (
@@ -64,6 +66,15 @@ export function MessagesView() {
           <h1 className="font-display text-2xl font-bold text-foreground text-balance">Messages</h1>
           <p className="text-sm text-muted-foreground">Your conversations with connected families.</p>
         </div>
+        <Button
+          variant="outline"
+          onClick={() => setNewMessageOpen(true)}
+          className="shrink-0 gap-2"
+        >
+          <PenSquare className="size-4" />
+          <span className="hidden sm:inline">New message</span>
+          <span className="sm:hidden">Message</span>
+        </Button>
         <Button onClick={() => setCreateOpen(true)} className="shrink-0 gap-2">
           <UserPlus className="size-4" />
           <span className="hidden sm:inline">New group</span>
@@ -159,6 +170,12 @@ export function MessagesView() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={(conversationId) => setSelectedKey(`group:${conversationId}`)}
+      />
+
+      <NewMessageDialog
+        open={newMessageOpen}
+        onOpenChange={setNewMessageOpen}
+        onSelect={(userId) => setSelectedKey(`direct:${userId}`)}
       />
     </div>
   )
