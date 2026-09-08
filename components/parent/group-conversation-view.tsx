@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition, type FormEvent, type KeyboardEvent } from "react"
 import useSWR from "swr"
-import { ArrowLeft, Send, Users } from "lucide-react"
+import { ArrowLeft, Send, UserPlus, Users } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import {
@@ -11,6 +11,7 @@ import {
   sendGroupMessage,
   type GroupMessage,
 } from "@/app/actions/groups"
+import { AddMembersDialog } from "@/components/parent/add-members-dialog"
 import { useMessagesStore } from "@/components/parent/messages-store"
 import { cn } from "@/lib/utils"
 
@@ -68,6 +69,7 @@ export function GroupConversationView({
   const [isSending, startSending] = useTransition()
   const [sendError, setSendError] = useState<string | null>(null)
   const [showMembers, setShowMembers] = useState(false)
+  const [showAddMembers, setShowAddMembers] = useState(false)
 
   const conversation = data?.conversation
   const messages = data?.messages ?? []
@@ -147,7 +149,30 @@ export function GroupConversationView({
             {memberCount} {memberCount === 1 ? "member" : "members"}
           </button>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="shrink-0 gap-1.5 rounded-xl"
+          onClick={() => setShowAddMembers(true)}
+        >
+          <UserPlus className="size-4" />
+          <span className="hidden sm:inline">Add members</span>
+        </Button>
       </div>
+
+      {conversation && (
+        <AddMembersDialog
+          conversationId={conversationId}
+          groupName={displayName}
+          open={showAddMembers}
+          onOpenChange={setShowAddMembers}
+          onAdded={() => {
+            // Refresh this conversation (member list/count) and the inbox row.
+            mutate()
+            refreshInbox()
+          }}
+        />
+      )}
 
       {showMembers && conversation && (
         <div className="border-b border-border/70 bg-muted/40 p-3">

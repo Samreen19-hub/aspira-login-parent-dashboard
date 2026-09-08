@@ -182,6 +182,91 @@ export async function createGroup(
   return conversation.id
 }
 
+/**
+ * The signed-in user's accepted connections who are NOT already members of
+ * `conversationId` — i.e. the only people eligible to be ADDED to this group.
+ * Enforces membership server-side (a non-member gets an error, never a list),
+ * and reuses the exact accepted-connection gate as group creation so a pending
+ * request, Discover user, or follow can never be surfaced as addable.
+ */
+export async function getAddableConnections(
+  conversationId: string,
+): Promise<GroupCandidate[]> {
+  const meId = await getUserId()
+  if (!conversationId) throw new Error('A valid group is required.')
+  await ensureGroupTables()
+
+  if (!(await isMember(meId, conversationId))) {
+    throw new Error('You can only add members to a group you belong to.')
+  }
+
+  // Current members of this group — excluded from the addable list.
+  const existingRows = await db
+    .select({ userId: conversationMembers.userId })
+    .from(conversationMembers)
+    .where(eq(conversationMembers.conversationId, conversationId))
+  const existing = new Set(existingRows.map((row) => row.userId))
+
+  const candidates = await getGroupCandidates()
+  return candidates.filter((person) => !existing.has(person.userId))
+}
+
+/**
+ * Adds accepted connections to an EXISTING group. Never creates a conversation.
+ * Validates (server-side) that the caller is a member, that each selected id is
+ * an accepted connection of the caller, and skips anyone already a member. The
+ * insert uses `onConflictDoNothing` against the `conversation_members_unique`
+ * index so a race cannot create duplicate membership rows. Existing members and
+ * messages are untouched. Returns how many members were actually added.
+ */
+export async function addGroupMembers(
+  conversationId: string,
+  memberIds: string[],
+): Promise<number> {
+  const meId = await getUserId()
+  if (!conversationId) throw new Error('A valid group is required.')
+  await ensureGroupTables()
+
+  if (!(await isMember(meId, conversationId))) {
+    throw new Error('You can only add members to a group you belong to.')
+  }
+
+  const requested = Array.from(new Set(memberIds ?? [])).filter(Boolean)
+  if (requested.length === 0) {
+    throw new Error('Select at least one connection to add.')
+  }
+
+  // Never trust the client list: every added member must be an accepted
+  // connection of the acting user (same gate as group creation).
+  const allowed = await acceptedConnectionIds(meId)
+  const invalid = requested.filter((id) => !allowed.has(id))
+  if (invalid.length > 0) {
+    throw new Error('You can only add your accepted connections to a group.')
+  }
+
+  // Skip anyone already in the group so existing membership stays unchanged.
+  const existingRows = await db
+    .select({ userId: conversationMembers.userId })
+    .from(conversationMembers)
+    .where(eq(conversationMembers.conversationId, conversationId))
+  const existing = new Set(existingRows.map((row) => row.userId))
+  const toAdd = requested.filter((id) => !existing.has(id))
+  if (toAdd.length === 0) return 0
+
+  await db
+    .insert(conversationMembers)
+    .values(
+      toAdd.map((userId) => ({
+        conversationId,
+        userId,
+      })),
+    )
+    .onConflictDoNothing()
+
+  revalidatePath('/parent/messages')
+  return toAdd.length
+}
+
 export type GroupSummary = {
   conversationId: string
   name: string
