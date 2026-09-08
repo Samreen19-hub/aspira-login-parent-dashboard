@@ -267,6 +267,79 @@ export async function addGroupMembers(
   return toAdd.length
 }
 
+/**
+ * Removes ONE member from an existing group. Reuses the existing
+ * `conversation_members` structure and only deletes that user's membership row
+ * for this conversation — it never touches messages (the removed member's past
+ * messages stay), never deletes the group, and never affects other members or
+ * other conversations. Authorization: the caller must be a member of the group
+ * (any member may remove another), and a member can NOT remove themselves
+ * through this action.
+ */
+export async function removeGroupMember(
+  conversationId: string,
+  memberId: string,
+): Promise<void> {
+  const meId = await getUserId()
+  if (!conversationId) throw new Error('A valid group is required.')
+  if (!memberId) throw new Error('Select a member to remove.')
+  await ensureGroupTables()
+
+  if (!(await isMember(meId, conversationId))) {
+    throw new Error('You can only manage members of a group you belong to.')
+  }
+  if (memberId === meId) {
+    throw new Error("You can't remove yourself from the group.")
+  }
+
+  // Delete only the target's membership row for THIS conversation. Messages are
+  // deliberately left intact so history is preserved.
+  await db
+    .delete(conversationMembers)
+    .where(
+      and(
+        eq(conversationMembers.conversationId, conversationId),
+        eq(conversationMembers.userId, memberId),
+      ),
+    )
+
+  revalidatePath('/parent/messages')
+}
+
+/**
+ * Deletes an ENTIRE group conversation. Only the group creator
+ * (`conversations.created_by`) is authorized. Removes, in order, the group's
+ * messages (rows on `public.messages` whose `conversation_id` matches — direct
+ * messages carry a null `conversation_id` and are never matched), then its
+ * `conversation_members` rows, then the `conversations` row itself. No other
+ * group or any direct message is affected.
+ */
+export async function deleteGroup(conversationId: string): Promise<void> {
+  const meId = await getUserId()
+  if (!conversationId) throw new Error('A valid group is required.')
+  await ensureGroupTables()
+
+  const [convo] = await db
+    .select({ id: conversations.id, createdBy: conversations.createdBy })
+    .from(conversations)
+    .where(eq(conversations.id, conversationId))
+    .limit(1)
+  if (!convo) throw new Error('Group not found.')
+  if (convo.createdBy !== meId) {
+    throw new Error('Only the group creator can delete this group.')
+  }
+
+  // Group messages only: direct messages have a null conversation_id, so this
+  // filter can never match them.
+  await db.delete(messages).where(eq(messages.conversationId, conversationId))
+  await db
+    .delete(conversationMembers)
+    .where(eq(conversationMembers.conversationId, conversationId))
+  await db.delete(conversations).where(eq(conversations.id, conversationId))
+
+  revalidatePath('/parent/messages')
+}
+
 export type GroupSummary = {
   conversationId: string
   name: string
@@ -410,6 +483,11 @@ export type GroupConversationDetail = {
     name: string
     memberCount: number
     members: GroupMember[]
+    // The group creator's user id and whether the signed-in viewer is that
+    // creator — drives who may see the "Delete group" action in the UI.
+    createdBy: string
+    viewerId: string
+    viewerIsCreator: boolean
   }
   messages: GroupMessage[]
 }
@@ -430,7 +508,11 @@ export async function getGroupConversation(
   if (!(await isMember(meId, conversationId))) return null
 
   const [convo] = await db
-    .select({ id: conversations.id, name: conversations.name })
+    .select({
+      id: conversations.id,
+      name: conversations.name,
+      createdBy: conversations.createdBy,
+    })
     .from(conversations)
     .where(eq(conversations.id, conversationId))
     .limit(1)
@@ -471,6 +553,9 @@ export async function getGroupConversation(
       name: convo.name ?? 'Group',
       memberCount: members.length,
       members,
+      createdBy: convo.createdBy,
+      viewerId: meId,
+      viewerIsCreator: convo.createdBy === meId,
     },
     messages: rows.map((m) => ({
       id: m.id,
