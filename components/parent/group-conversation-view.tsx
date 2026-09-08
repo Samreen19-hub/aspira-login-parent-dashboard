@@ -44,29 +44,23 @@ function formatMessageTime(iso: string) {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
 }
 
-// Stable per-sender name tint, WhatsApp-style, so each group member's name is
-// visually distinct and easy to attribute. The colour is derived purely from
-// the member's `senderId`, so it is deterministic and never changes across
-// renders or when membership changes — the same person always keeps the same
-// colour (including the current user, if their name is ever shown). Each entry
-// pairs a readable light-mode shade with a lighter dark-mode shade so the name
-// stays accessible against the card background in either theme.
-const SENDER_TINTS = [
-  "text-brand",
-  "text-emerald-600 dark:text-emerald-400",
-  "text-violet-600 dark:text-violet-400",
-  "text-amber-600 dark:text-amber-400",
-  "text-rose-600 dark:text-rose-400",
-  "text-sky-600 dark:text-sky-400",
-  "text-teal-600 dark:text-teal-400",
-  "text-fuchsia-600 dark:text-fuchsia-400",
-  "text-cyan-600 dark:text-cyan-400",
-  "text-orange-600 dark:text-orange-400",
-]
-function tintFor(senderId: string) {
+// Stable per-sender name colour, WhatsApp-style, so each group member's name is
+// visually distinct and easy to attribute. The colour is applied as an inline
+// `style` (not a Tailwind class) so it is guaranteed to render and can never be
+// purged, merged away, or overridden by another `text-*` utility on the span.
+//
+// A curated set of evenly-spread, vivid hues at a fixed saturation/lightness
+// that stays readable on both the light card (white) and the dark card
+// (near-black). Hues are far apart so even adjacent members look different.
+const SENDER_HUES = [210, 145, 275, 25, 330, 190, 45, 300, 165, 0, 95, 255]
+function senderColor(senderId: string) {
+  // Deterministic hash of the senderId → a fixed index into SENDER_HUES, so the
+  // same person always keeps the same colour across renders, membership
+  // changes, and refreshes (the current user included, if their name shows).
   let hash = 0
   for (let i = 0; i < senderId.length; i++) hash = (hash * 31 + senderId.charCodeAt(i)) >>> 0
-  return SENDER_TINTS[hash % SENDER_TINTS.length]
+  const hue = SENDER_HUES[hash % SENDER_HUES.length]
+  return `hsl(${hue} 65% 45%)`
 }
 
 export function GroupConversationView({
