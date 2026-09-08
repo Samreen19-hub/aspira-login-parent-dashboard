@@ -73,6 +73,93 @@ async function getConnectedPeople(meId: string) {
 }
 
 /**
+ * The other participants in the signed-in user's existing DIRECT conversations.
+ * A direct message is a `public.messages` row with a concrete `recipient_id`
+ * and no `conversation_id` (group messages set `conversation_id` and are
+ * excluded). This is independent of the connection status, so a conversation
+ * survives after the two users disconnect — its stored messages are its history.
+ */
+async function getDirectMessagePeople(meId: string) {
+  return db
+    .selectDistinctOn([profiles.userId], PERSON_COLUMNS)
+    .from(messages)
+    .innerJoin(
+      profiles,
+      or(
+        and(
+          eq(messages.senderId, meId),
+          eq(profiles.userId, messages.recipientId),
+        ),
+        and(
+          eq(messages.recipientId, meId),
+          eq(profiles.userId, messages.senderId),
+        ),
+      ),
+    )
+    .leftJoin(user, eq(user.id, profiles.userId))
+    .where(isNull(messages.conversationId))
+}
+
+/**
+ * True when a direct (one-to-one) conversation already exists between the
+ * signed-in user and `otherUserId` — i.e. at least one `public.messages` row in
+ * either direction with no `conversation_id`. Used so an existing conversation
+ * stays openable and sendable even after the connection is removed.
+ */
+async function hasExistingDirectConversation(
+  meId: string,
+  otherUserId: string,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        isNull(messages.conversationId),
+        or(
+          and(
+            eq(messages.senderId, meId),
+            eq(messages.recipientId, otherUserId),
+          ),
+          and(
+            eq(messages.senderId, otherUserId),
+            eq(messages.recipientId, meId),
+          ),
+        ),
+      ),
+    )
+    .limit(1)
+  return Boolean(row)
+}
+
+/** True when the two users currently have an accepted connection. */
+async function hasAcceptedConnection(
+  meId: string,
+  otherUserId: string,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: connections.id })
+    .from(connections)
+    .where(
+      and(
+        eq(connections.status, 'accepted'),
+        or(
+          and(
+            eq(connections.requesterId, meId),
+            eq(connections.recipientId, otherUserId),
+          ),
+          and(
+            eq(connections.requesterId, otherUserId),
+            eq(connections.recipientId, meId),
+          ),
+        ),
+      ),
+    )
+    .limit(1)
+  return Boolean(row)
+}
+
+/**
  * The signed-in user's inbox: one row per connected person, annotated with the
  * latest message preview, its time, and the unread-incoming count. Sorted by
  * most recent activity first; connected people with no messages yet appear
@@ -82,14 +169,34 @@ export async function getConversations(): Promise<ConversationSummary[]> {
   const meId = await getUserId()
   await ensureMessagesTable()
 
-  const people = await getConnectedPeople(meId)
+  // The inbox is the UNION of two sets:
+  //   1. people the user currently has an accepted connection with, and
+  //   2. people the user already has a direct conversation with.
+  // Set (2) keeps an existing 1-to-1 chat visible after the connection is
+  // removed, while a mere past connection with no messages never appears
+  // (it is not in either set once disconnected). De-duplicated by userId.
+  const [connectedPeople, directPeople] = await Promise.all([
+    getConnectedPeople(meId),
+    getDirectMessagePeople(meId),
+  ])
+  const peopleById = new Map<string, (typeof connectedPeople)[number]>()
+  for (const person of connectedPeople) peopleById.set(person.userId, person)
+  for (const person of directPeople) {
+    if (!peopleById.has(person.userId)) peopleById.set(person.userId, person)
+  }
+  const people = Array.from(peopleById.values())
 
   // Every message the user is part of, newest first — so the first time we see
   // a given partner while iterating is that conversation's latest message.
   const myMessages = await db
     .select()
     .from(messages)
-    .where(or(eq(messages.senderId, meId), eq(messages.recipientId, meId)))
+    .where(
+      and(
+        isNull(messages.conversationId),
+        or(eq(messages.senderId, meId), eq(messages.recipientId, meId)),
+      ),
+    )
     .orderBy(desc(messages.createdAt))
 
   type Agg = {
@@ -100,7 +207,10 @@ export async function getConversations(): Promise<ConversationSummary[]> {
   }
   const byOther = new Map<string, Agg>()
   for (const msg of myMessages) {
+    // Direct messages only (group messages are already filtered out above), so
+    // the non-me party is always a concrete user id; skip defensively if not.
     const otherId = msg.senderId === meId ? msg.recipientId : msg.senderId
+    if (!otherId) continue
     const existing = byOther.get(otherId)
     if (!existing) {
       byOther.set(otherId, {
@@ -180,26 +290,14 @@ export async function getConversation(
   if (!otherUserId || otherUserId === meId) return null
   await ensureMessagesTable()
 
-  const [connected] = await db
-    .select({ id: connections.id })
-    .from(connections)
-    .where(
-      and(
-        eq(connections.status, 'accepted'),
-        or(
-          and(
-            eq(connections.requesterId, meId),
-            eq(connections.recipientId, otherUserId),
-          ),
-          and(
-            eq(connections.requesterId, otherUserId),
-            eq(connections.recipientId, meId),
-          ),
-        ),
-      ),
-    )
-    .limit(1)
-  if (!connected) return null
+  // Viewable when the pair is an accepted connection OR an existing direct
+  // conversation already exists between them — so removing the connection does
+  // not hide (or destroy) a conversation the two users already had.
+  const [connected, hasConversation] = await Promise.all([
+    hasAcceptedConnection(meId, otherUserId),
+    hasExistingDirectConversation(meId, otherUserId),
+  ])
+  if (!connected && !hasConversation) return null
 
   const [person] = await db
     .select(PERSON_COLUMNS)
@@ -278,26 +376,15 @@ export async function sendMessage(
     throw new Error('A valid recipient is required.')
   }
 
-  const [connected] = await db
-    .select({ id: connections.id })
-    .from(connections)
-    .where(
-      and(
-        eq(connections.status, 'accepted'),
-        or(
-          and(
-            eq(connections.requesterId, meId),
-            eq(connections.recipientId, recipientId),
-          ),
-          and(
-            eq(connections.requesterId, recipientId),
-            eq(connections.recipientId, meId),
-          ),
-        ),
-      ),
-    )
-    .limit(1)
-  if (!connected) {
+  // Allowed when the pair is an accepted connection OR they already have an
+  // existing direct conversation. The latter lets users keep replying in a
+  // conversation that predates a disconnect, without re-opening messaging to
+  // people they never had a conversation with.
+  const [connected, hasConversation] = await Promise.all([
+    hasAcceptedConnection(meId, recipientId),
+    hasExistingDirectConversation(meId, recipientId),
+  ])
+  if (!connected && !hasConversation) {
     throw new Error('You can only message your connections.')
   }
 
@@ -328,6 +415,43 @@ export async function markConversationRead(otherUserId: string): Promise<void> {
         eq(messages.recipientId, meId),
         eq(messages.senderId, otherUserId),
         isNull(messages.readAt),
+      ),
+    )
+
+  revalidatePath('/parent/messages')
+}
+
+/**
+ * Permanently deletes the one-to-one conversation between the signed-in user
+ * and `otherUserId`: every DIRECT `public.messages` row in either direction
+ * (`conversation_id IS NULL`). It is scoped to exactly this pair, so no other
+ * conversation is touched, and the `conversation_id IS NULL` filter guarantees
+ * group messages can never match. It deliberately does NOT touch profiles, the
+ * `connections` row, or follows — the two users stay connected and can start a
+ * fresh direct chat afterwards via New Message.
+ */
+export async function deleteConversation(otherUserId: string): Promise<void> {
+  const meId = await getUserId()
+  if (!otherUserId || otherUserId === meId) {
+    throw new Error('A valid person is required.')
+  }
+  await ensureMessagesTable()
+
+  await db
+    .delete(messages)
+    .where(
+      and(
+        isNull(messages.conversationId),
+        or(
+          and(
+            eq(messages.senderId, meId),
+            eq(messages.recipientId, otherUserId),
+          ),
+          and(
+            eq(messages.senderId, otherUserId),
+            eq(messages.recipientId, meId),
+          ),
+        ),
       ),
     )
 

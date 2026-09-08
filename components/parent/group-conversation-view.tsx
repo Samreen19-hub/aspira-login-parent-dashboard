@@ -44,19 +44,23 @@ function formatMessageTime(iso: string) {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
 }
 
-// Stable per-sender tint so received messages in a group are easy to attribute.
-const SENDER_TINTS = [
-  "text-brand",
-  "text-emerald-600",
-  "text-violet-600",
-  "text-amber-600",
-  "text-rose-600",
-  "text-sky-600",
-]
-function tintFor(senderId: string) {
+// Stable per-sender name colour, WhatsApp-style, so each group member's name is
+// visually distinct and easy to attribute. The colour is applied as an inline
+// `style` (not a Tailwind class) so it is guaranteed to render and can never be
+// purged, merged away, or overridden by another `text-*` utility on the span.
+//
+// A curated set of evenly-spread, vivid hues at a fixed saturation/lightness
+// that stays readable on both the light card (white) and the dark card
+// (near-black). Hues are far apart so even adjacent members look different.
+const SENDER_HUES = [210, 145, 275, 25, 330, 190, 45, 300, 165, 0, 95, 255]
+function senderColor(senderId: string) {
+  // Deterministic hash of the senderId → a fixed index into SENDER_HUES, so the
+  // same person always keeps the same colour across renders, membership
+  // changes, and refreshes (the current user included, if their name shows).
   let hash = 0
   for (let i = 0; i < senderId.length; i++) hash = (hash * 31 + senderId.charCodeAt(i)) >>> 0
-  return SENDER_TINTS[hash % SENDER_TINTS.length]
+  const hue = SENDER_HUES[hash % SENDER_HUES.length]
+  return `hsl(${hue} 65% 45%)`
 }
 
 export function GroupConversationView({
@@ -373,8 +377,12 @@ function GroupBubble({ message, showSender }: { message: GroupMessage; showSende
   return (
     <div className={cn("flex flex-col", message.mine ? "items-end" : "items-start")}>
       {showSender && (
-        <span className={cn("mb-0.5 ml-1 text-xs font-semibold", tintFor(message.senderId))}>
-          {message.senderName}
+        
+          <span
+  className="mb-0.5 ml-1 text-xs font-semibold"
+  style={{ color: senderColor(message.senderId) }}
+        >
+        {message.senderName}
         </span>
       )}
       <div
