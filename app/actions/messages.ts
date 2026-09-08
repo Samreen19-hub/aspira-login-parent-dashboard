@@ -50,28 +50,6 @@ const PERSON_COLUMNS = {
   image: user.image,
 }
 
-/** The signed-in user's accepted connections (the people they can message). */
-async function getConnectedPeople(meId: string) {
-  return db
-    .select(PERSON_COLUMNS)
-    .from(connections)
-    .innerJoin(
-      profiles,
-      or(
-        and(
-          eq(connections.requesterId, meId),
-          eq(profiles.userId, connections.recipientId),
-        ),
-        and(
-          eq(connections.recipientId, meId),
-          eq(profiles.userId, connections.requesterId),
-        ),
-      ),
-    )
-    .leftJoin(user, eq(user.id, profiles.userId))
-    .where(eq(connections.status, 'accepted'))
-}
-
 /**
  * The other participants in the signed-in user's existing DIRECT conversations.
  * A direct message is a `public.messages` row with a concrete `recipient_id`
@@ -160,30 +138,32 @@ async function hasAcceptedConnection(
 }
 
 /**
- * The signed-in user's inbox: one row per connected person, annotated with the
- * latest message preview, its time, and the unread-incoming count. Sorted by
- * most recent activity first; connected people with no messages yet appear
- * after active conversations, ordered by name. Never returns fake data.
+ * The signed-in user's inbox: one row per person they have an actual direct
+ * conversation with, annotated with the latest message preview, its time, and
+ * the unread-incoming count. Sorted by most recent activity first. Never
+ * returns fake data.
+ *
+ * The inbox is derived SOLELY from the existence of at least one direct message
+ * between the two users (`getDirectMessagePeople`). A mere accepted connection
+ * with zero messages never appears — being connected does not create an inbox
+ * row. Because this is driven by the messages table:
+ *   - deleting a conversation (removing its messages) makes the person drop out
+ *     of the list immediately, while their `connections` row is untouched so
+ *     they stay available in New Message and remain messageable;
+ *   - if they message each other again later, the conversation reappears;
+ *   - an existing conversation stays visible even after the two users
+ *     disconnect, because its stored messages still exist.
  */
 export async function getConversations(): Promise<ConversationSummary[]> {
   const meId = await getUserId()
   await ensureMessagesTable()
 
-  // The inbox is the UNION of two sets:
-  //   1. people the user currently has an accepted connection with, and
-  //   2. people the user already has a direct conversation with.
-  // Set (2) keeps an existing 1-to-1 chat visible after the connection is
-  // removed, while a mere past connection with no messages never appears
-  // (it is not in either set once disconnected). De-duplicated by userId.
-  const [connectedPeople, directPeople] = await Promise.all([
-    getConnectedPeople(meId),
-    getDirectMessagePeople(meId),
-  ])
-  const peopleById = new Map<string, (typeof connectedPeople)[number]>()
-  for (const person of connectedPeople) peopleById.set(person.userId, person)
-  for (const person of directPeople) {
-    if (!peopleById.has(person.userId)) peopleById.set(person.userId, person)
-  }
+  // Only people the user has at least one direct (one-to-one) message with.
+  // Group messages are excluded inside getDirectMessagePeople via the
+  // `conversation_id IS NULL` filter. De-duplicated by userId.
+  const directPeople = await getDirectMessagePeople(meId)
+  const peopleById = new Map<string, (typeof directPeople)[number]>()
+  for (const person of directPeople) peopleById.set(person.userId, person)
   const people = Array.from(peopleById.values())
 
   // Every message the user is part of, newest first — so the first time we see
