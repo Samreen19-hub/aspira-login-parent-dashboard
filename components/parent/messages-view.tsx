@@ -47,14 +47,26 @@ function formatTimestamp(iso: string | null) {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
 }
 
-export function MessagesView({ initialUserId }: { initialUserId?: string }) {
+export function MessagesView({
+  initialUserId,
+  initialGroupId,
+}: {
+  initialUserId?: string
+  initialGroupId?: string
+}) {
   const { conversations, isLoading, error } = useMessagesStore()
   // The currently open conversation, identified by its composite key. On desktop the list and the
   // conversation are shown side by side; on mobile the conversation replaces the list until Back.
   // When arriving from the Network "Message" button (/parent/messages?to=<userId>), open that
   // person's direct conversation immediately using the same `direct:<userId>` key the inbox uses.
+  // A group_message notification arrives as ?group=<conversationId> and opens that group using the
+  // same `group:<conversationId>` key. `to` takes precedence when both are present.
   const [selectedKey, setSelectedKey] = useState<string | null>(
-    initialUserId ? `direct:${initialUserId}` : null,
+    initialUserId
+      ? `direct:${initialUserId}`
+      : initialGroupId
+        ? `group:${initialGroupId}`
+        : null,
   )
   const [createOpen, setCreateOpen] = useState(false)
   const [newMessageOpen, setNewMessageOpen] = useState(false)
