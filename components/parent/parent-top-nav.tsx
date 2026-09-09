@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useAuth } from '@/lib/auth-context'
 import { useMessagesStore } from '@/components/parent/messages-store'
+import { useNotificationsStore } from '@/components/parent/notifications-store'
 import { PARENT_PROFILE } from '@/lib/parent-data'
 import { cn } from '@/lib/utils'
 
@@ -33,7 +34,7 @@ const NAV = [
   { label: 'Home', href: '/parent', icon: Home },
   { label: 'Network', href: '/parent/network', icon: Users },
   { label: 'Messages', href: '/parent/messages', icon: MessageSquare },
-  { label: 'Notifications', href: '/parent/notifications', icon: Bell, badge: 6 },
+  { label: 'Notifications', href: '/parent/notifications', icon: Bell },
 ]
 
 export function ParentTopNav() {
@@ -43,12 +44,17 @@ export function ParentTopNav() {
   // Live unread-message count for the Messages icon badge; polled by the store for near-real-time
   // updates. Only messages where the signed-in user is the recipient are counted.
   const { unreadCount } = useMessagesStore()
+  // Live unread-notification count for the Notifications bell badge, polled by the notifications
+  // store on the same interval and scoped server-side to the signed-in recipient.
+  const { unreadCount: notificationsUnread } = useNotificationsStore()
 
-  // Resolve the badge shown on each nav item: Messages is the live unread count (hidden at 0),
-  // while other items keep their static badge.
+  // Resolve the badge shown on each nav item: Messages and Notifications each show their live
+  // unread count (hidden at 0); no other item carries a badge.
   function badgeFor(item: (typeof NAV)[number]) {
     if (item.href === '/parent/messages') return unreadCount > 0 ? unreadCount : undefined
-    return item.badge
+    if (item.href === '/parent/notifications')
+      return notificationsUnread > 0 ? notificationsUnread : undefined
+    return undefined
   }
 
   function handleLogout() {

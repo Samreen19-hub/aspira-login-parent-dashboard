@@ -7,6 +7,7 @@ import { auth } from '@/lib/auth'
 import { db, ensureFollowsTable } from '@/lib/db'
 import { connections, follows, profiles, user } from '@/lib/db/schema'
 import type { NetworkPerson, RelationshipStatus } from '@/lib/network-data'
+import { createNotification } from '@/app/actions/notifications'
 
 /**
  * Real Network connection system backed by Neon + Better Auth.
@@ -220,12 +221,23 @@ export async function followUser(targetUserId: string): Promise<void> {
     .limit(1)
   if (!target) throw new Error('That person could not be found.')
 
-  try {
-    await db
-      .insert(follows)
-      .values({ followerId: meId, followingId: targetUserId })
-  } catch {
-    // Unique-pair index caught a race / repeat follow: already following.
+  // `onConflictDoNothing` against the unique-pair index makes a repeat follow a
+  // true no-op AND tells us (via the returned rows) whether this was a genuinely
+  // new follow — so we only notify on a first follow, never on a repeat.
+  const inserted = await db
+    .insert(follows)
+    .values({ followerId: meId, followingId: targetUserId })
+    .onConflictDoNothing()
+    .returning({ id: follows.id })
+
+  if (inserted.length > 0) {
+    // Best-effort: a new follower notification for the target.
+    await createNotification({
+      recipientId: targetUserId,
+      type: 'follow',
+      entityId: inserted[0].id,
+      body: 'started following you',
+    })
   }
 
   revalidateNetwork()
@@ -375,7 +387,9 @@ export async function sendConnectionRequest(
             : 'pending_incoming',
       }
     }
-    // Reuse a rejected row: reset it as a fresh pending request from me.
+    // Reuse a rejected row: reset it as a fresh pending request from me. This is
+    // a genuinely new request (state changes rejected -> pending), so it does
+    // warrant a notification.
     await db
       .update(connections)
       .set({
@@ -385,21 +399,41 @@ export async function sendConnectionRequest(
         updatedAt: new Date(),
       })
       .where(eq(connections.id, existing.id))
+    await createNotification({
+      recipientId: targetUserId,
+      type: 'connection_request',
+      entityId: existing.id,
+      body: 'sent you a connection request',
+    })
     revalidateNetwork()
     return { status: 'pending_outgoing' }
   }
 
+  let createdConnectionId: string | null = null
   try {
-    await db.insert(connections).values({
-      requesterId: meId,
-      recipientId: targetUserId,
-      status: 'pending',
-    })
+    const [created] = await db
+      .insert(connections)
+      .values({
+        requesterId: meId,
+        recipientId: targetUserId,
+        status: 'pending',
+      })
+      .returning({ id: connections.id })
+    createdConnectionId = created?.id ?? null
   } catch {
     // Unique-pair index caught a race: a relationship now exists, so treat the
-    // request as already sent rather than surfacing a hard error.
+    // request as already sent rather than surfacing a hard error. No
+    // notification here — the row was not newly created by this call.
     return { status: 'pending_outgoing' }
   }
+
+  // Best-effort notification for the freshly created request only.
+  await createNotification({
+    recipientId: targetUserId,
+    type: 'connection_request',
+    entityId: createdConnectionId,
+    body: 'sent you a connection request',
+  })
 
   revalidateNetwork()
   return { status: 'pending_outgoing' }
@@ -425,11 +459,20 @@ export async function acceptConnectionRequest(
         eq(connections.status, 'pending'),
       ),
     )
-    .returning({ id: connections.id })
+    .returning({ id: connections.id, requesterId: connections.requesterId })
 
   if (updated.length === 0) {
     throw new Error('This request is no longer available.')
   }
+
+  // Best-effort: notify the ORIGINAL requester that the accepter (me) accepted.
+  // Only runs after the acceptance has actually succeeded above.
+  await createNotification({
+    recipientId: updated[0].requesterId,
+    type: 'connection_accepted',
+    entityId: updated[0].id,
+    body: 'accepted your connection request',
+  })
 
   revalidateNetwork()
 }

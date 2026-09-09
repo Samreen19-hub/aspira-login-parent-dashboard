@@ -125,3 +125,28 @@ export const conversationMembers = pgTable('conversation_members', {
   joinedAt: timestamp('joined_at', { withTimezone: true }).notNull().defaultNow(),
   lastReadAt: timestamp('last_read_at', { withTimezone: true }),
 })
+
+/**
+ * Per-user notifications (schema: public). One row = one thing that happened
+ * that `recipient_id` should see (a message, group message, connection request,
+ * connection acceptance, or follow). `actor_id` is who caused it (nullable for
+ * system-originated notifications) and is ALWAYS the authenticated session user
+ * at creation time — never trusted from the browser. `entity_id` points at the
+ * source row (message id, connection id, follow id) so the UI can deep-link.
+ * `read_at` is null until the recipient reads it, which drives the unread badge.
+ *
+ * Following the existing Aspira convention this carries no foreign keys to
+ * `neon_auth.user`; it is provisioned lazily by `ensureNotificationsTable`
+ * (see `lib/db/index.ts`). This is the SINGLE notifications table — the static
+ * School Updates feature is intentionally separate and untouched.
+ */
+export const notifications = pgTable('notifications', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  recipientId: uuid('recipient_id').notNull(),
+  actorId: uuid('actor_id'),
+  type: text('type').notNull(),
+  entityId: uuid('entity_id'),
+  body: text('body'),
+  readAt: timestamp('read_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})

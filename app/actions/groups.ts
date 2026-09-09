@@ -13,6 +13,7 @@ import {
   profiles,
   user,
 } from '@/lib/db/schema'
+import { createNotifications } from '@/app/actions/notifications'
 
 /**
  * Group-chat data layer backed by the SAME Neon database, session handling, and
@@ -589,11 +590,14 @@ export async function sendGroupMessage(
     throw new Error('You can only message groups you belong to.')
   }
 
-  await db.insert(messages).values({
-    senderId: meId,
-    conversationId,
-    body: trimmed,
-  })
+  const [created] = await db
+    .insert(messages)
+    .values({
+      senderId: meId,
+      conversationId,
+      body: trimmed,
+    })
+    .returning({ id: messages.id })
 
   // Bump the group's activity time and keep the sender caught up.
   await db
@@ -609,6 +613,20 @@ export async function sendGroupMessage(
         eq(conversationMembers.userId, meId),
       ),
     )
+
+  // Best-effort notifications for every OTHER member of the group. Membership
+  // is read from the existing `conversation_members` architecture; the sender
+  // is excluded inside `createNotifications` (actor is never a recipient).
+  const memberRows = await db
+    .select({ userId: conversationMembers.userId })
+    .from(conversationMembers)
+    .where(eq(conversationMembers.conversationId, conversationId))
+  await createNotifications({
+    recipientIds: memberRows.map((row) => row.userId),
+    type: 'group_message',
+    entityId: created?.id ?? null,
+    body: trimmed.slice(0, 140),
+  })
 
   revalidatePath('/parent/messages')
 }

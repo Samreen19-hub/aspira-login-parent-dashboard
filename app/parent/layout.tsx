@@ -6,6 +6,7 @@ import { SocialStoreProvider } from "@/components/parent/social-store"
 import { ChildrenStoreProvider } from "@/components/parent/children-store"
 import { SchoolUpdatesStoreProvider } from "@/components/parent/school-updates-store"
 import { MessagesStoreProvider } from "@/components/parent/messages-store"
+import { NotificationsStoreProvider } from "@/components/parent/notifications-store"
 
 export default function ParentLayout({ children }: { children: ReactNode }) {
   return (
@@ -15,10 +16,12 @@ export default function ParentLayout({ children }: { children: ReactNode }) {
           <FeedStoreProvider>
             <SocialStoreProvider>
               <MessagesStoreProvider>
-                <div className="min-h-svh bg-lavender">
-                  <ParentTopNav />
-                  <main className="mx-auto max-w-[1400px] px-4 py-6 lg:px-6">{children}</main>
-                </div>
+                <NotificationsStoreProvider>
+                  <div className="min-h-svh bg-lavender">
+                    <ParentTopNav />
+                    <main className="mx-auto max-w-[1400px] px-4 py-6 lg:px-6">{children}</main>
+                  </div>
+                </NotificationsStoreProvider>
               </MessagesStoreProvider>
             </SocialStoreProvider>
           </FeedStoreProvider>
