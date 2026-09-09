@@ -10,7 +10,10 @@ import { PageShell } from "@/components/parent/page-shell"
 import {
   useNotificationsStore,
 } from "@/components/parent/notifications-store"
-import type { NotificationView } from "@/app/actions/notifications"
+import {
+  resolveGroupConversationId,
+  type NotificationView,
+} from "@/app/actions/notifications"
 
 // Presentation mapping only — it turns a stored notification (type + actor + body) into display
 // text/icon/route WITHOUT changing the database model. School Updates remain a separate feature and
@@ -43,13 +46,21 @@ function present(notification: NotificationView): Presentation {
         icon: MessageSquare,
         title: `New message from ${actor}`,
         description: notification.body,
-        href: "/parent/messages",
+        // The actor is the other participant of the 1-to-1 conversation, so we
+        // reuse the existing /parent/messages?to=<userId> deep-link that the
+        // Network "Message" button already uses to open the direct thread.
+        href: notification.actorId
+          ? `/parent/messages?to=${notification.actorId}`
+          : "/parent/messages",
       }
     case "group_message":
       return {
         icon: Users,
         title: `${actor} posted in a group`,
         description: notification.body,
+        // entity_id is the message id, not the conversation. The conversation
+        // is resolved server-side at click time (see handleOpen) and appended
+        // as ?group=<conversationId>; this base href is the fallback.
         href: "/parent/messages",
       }
     case "connection_request":
@@ -71,7 +82,9 @@ function present(notification: NotificationView): Presentation {
         icon: UserPlus,
         title: `${actor} started following you`,
         description: null,
-        href: "/parent/network",
+        // Open the Followers tab (the actor is a new follower), reusing the
+        // existing Network tab selection via ?tab=followers.
+        href: "/parent/network?tab=followers",
       }
     default:
       return {
@@ -90,7 +103,21 @@ export default function NotificationsPage() {
 
   async function handleOpen(notification: NotificationView, href: string) {
     if (!notification.read) await markRead(notification.id)
-    router.push(href)
+
+    // A group_message notification's entity_id is the message id, so resolve
+    // the owning group conversation server-side and deep-link to it. On any
+    // failure we fall back to the base /parent/messages href.
+    let destination = href
+    if (notification.type === "group_message" && notification.entityId) {
+      try {
+        const conversationId = await resolveGroupConversationId(notification.entityId)
+        if (conversationId) destination = `/parent/messages?group=${conversationId}`
+      } catch {
+        // keep the fallback href
+      }
+    }
+
+    router.push(destination)
   }
 
   return (

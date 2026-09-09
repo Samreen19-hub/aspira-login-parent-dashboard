@@ -4,8 +4,14 @@ import { and, desc, eq, isNull } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 import { auth } from '@/lib/auth'
-import { db, ensureNotificationsTable } from '@/lib/db'
-import { notifications, profiles, user } from '@/lib/db/schema'
+import { db, ensureMessagesTable, ensureNotificationsTable } from '@/lib/db'
+import {
+  conversationMembers,
+  messages,
+  notifications,
+  profiles,
+  user,
+} from '@/lib/db/schema'
 
 /**
  * Persistent per-user notifications backed by the SAME Neon database, Better
@@ -174,6 +180,37 @@ export async function getNotifications(): Promise<NotificationView[]> {
     read: row.readAt !== null,
     createdAt: row.createdAt.toISOString(),
   }))
+}
+
+/**
+ * Resolves the group conversation a `group_message` notification points at.
+ *
+ * The `entity_id` on a group_message notification is the specific `messages.id`
+ * (see `sendGroupMessage`), NOT the conversation. To open the correct group
+ * chat we look up that existing message row and return its `conversation_id`,
+ * reusing the existing messages data — no new column, table, or id is created.
+ * The read is scoped to a group the signed-in user actually belongs to, so a
+ * user can never resolve a conversation they are not a member of. Returns null
+ * when the message no longer exists or is not a group message.
+ */
+export async function resolveGroupConversationId(
+  messageId: string,
+): Promise<string | null> {
+  const meId = await getUserId()
+  if (!messageId) return null
+  await ensureMessagesTable()
+
+  const rows = await db
+    .select({ conversationId: messages.conversationId })
+    .from(messages)
+    .innerJoin(
+      conversationMembers,
+      eq(conversationMembers.conversationId, messages.conversationId),
+    )
+    .where(and(eq(messages.id, messageId), eq(conversationMembers.userId, meId)))
+    .limit(1)
+
+  return rows[0]?.conversationId ?? null
 }
 
 /**

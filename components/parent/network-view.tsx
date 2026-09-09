@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import {
   ArrowLeft,
   Users,
@@ -44,10 +44,23 @@ const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
 
 const SORT_OPTIONS = ["Recently Added", "Name (A-Z)", "Most Mutual Connections"]
 
+const TAB_IDS: TabId[] = ["connections", "following", "followers", "discover"]
+
+function isTabId(value: string | null): value is TabId {
+  return value !== null && (TAB_IDS as string[]).includes(value)
+}
+
 export function NetworkView() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const store = useNetworkStore()
-  const [tab, setTab] = useState<TabId>("connections")
+  // A follow notification deep-links here as /parent/network?tab=followers so the click lands on the
+  // Followers tab (not the default Connections). The tab still lives in local state exactly as before;
+  // the query param only seeds the initial selection and is otherwise ignored.
+  const initialTabParam = searchParams.get("tab")
+  const [tab, setTab] = useState<TabId>(
+    isTabId(initialTabParam) ? initialTabParam : "connections",
+  )
   const [query, setQuery] = useState("")
   const [sort, setSort] = useState(SORT_OPTIONS[0])
 
