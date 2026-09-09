@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache'
 import { auth } from '@/lib/auth'
 import { db, ensureMessagesTable } from '@/lib/db'
 import { connections, messages, profiles, user } from '@/lib/db/schema'
+import { createNotification } from '@/app/actions/notifications'
 
 /**
  * Real direct-messaging data layer backed by Neon + Better Auth.
@@ -368,10 +369,22 @@ export async function sendMessage(
     throw new Error('You can only message your connections.')
   }
 
-  await db.insert(messages).values({
-    senderId: meId,
+  const [created] = await db
+    .insert(messages)
+    .values({
+      senderId: meId,
+      recipientId,
+      body: trimmed,
+    })
+    .returning({ id: messages.id })
+
+  // Best-effort notification for the recipient (never the sender). A failure
+  // here is swallowed inside `createNotification` so the message still sends.
+  await createNotification({
     recipientId,
-    body: trimmed,
+    type: 'message',
+    entityId: created?.id ?? null,
+    body: trimmed.slice(0, 140),
   })
 
   revalidatePath('/parent/messages')

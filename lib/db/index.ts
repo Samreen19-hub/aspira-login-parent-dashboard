@@ -172,3 +172,44 @@ export function ensureGroupTables(): Promise<void> {
   }
   return groupTablesReady
 }
+
+/**
+ * Lazily provisions the `public.notifications` table (and its two supporting
+ * indexes) using the shared pool, following the exact same idempotent,
+ * memoized, schema-qualified pattern as the helpers above. No foreign keys to
+ * `neon_auth` — matching the existing Aspira convention. The indexes cover the
+ * two hot paths: listing a recipient's notifications newest-first, and counting
+ * a recipient's unread notifications.
+ */
+let notificationsReady: Promise<void> | null = null
+export function ensureNotificationsTable(): Promise<void> {
+  if (!notificationsReady) {
+    notificationsReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.notifications (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          recipient_id uuid NOT NULL,
+          actor_id uuid,
+          type text NOT NULL,
+          entity_id uuid,
+          body text,
+          read_at timestamptz,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS notifications_recipient_created
+        ON public.notifications (recipient_id, created_at DESC)
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS notifications_recipient_unread
+        ON public.notifications (recipient_id, read_at)
+      `)
+    })().catch((error) => {
+      // Reset so a transient failure can be retried on the next call.
+      notificationsReady = null
+      throw error
+    })
+  }
+  return notificationsReady
+}
