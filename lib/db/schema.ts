@@ -1,5 +1,7 @@
 import {
   boolean,
+  integer,
+  jsonb,
   pgSchema,
   pgTable,
   text,
@@ -149,4 +151,86 @@ export const notifications = pgTable('notifications', {
   body: text('body'),
   readAt: timestamp('read_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * User posts (schema: public). ONE row per post; every post type shares this
+ * table with `type` acting as a free-text discriminator (`text | photo |
+ * achievement | poll | event`, and any future kind — no schema change needed).
+ * `author_id` is ALWAYS the authenticated session user at creation time, never
+ * trusted from the browser. `scope` mirrors the existing client convention:
+ * null = main Home feed; otherwise the group/community slug the post belongs to.
+ * Type-specific structure (achievement/photo/poll/event details) lives in the
+ * `payload` JSONB so no per-type columns or tables are required; live like /
+ * comment / vote / rsvp counts are derived from the tables below, never stored
+ * in the payload. Following the existing Aspira convention this carries no
+ * foreign keys to `neon_auth.user`; it is provisioned lazily by
+ * `ensurePostsTables` (see `lib/db/index.ts`).
+ */
+export const posts = pgTable('posts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  authorId: uuid('author_id').notNull(),
+  type: text('type').notNull(),
+  body: text('body'),
+  scope: text('scope'),
+  payload: jsonb('payload').notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * Likes on a post (schema: public). One row = one user liking one post. The
+ * unique `(post_id, user_id)` index (created in `ensurePostsTables`) makes a
+ * like idempotent, so the like count is simply `COUNT(*)` for a post and a
+ * toggle is an insert-or-delete. `user_id` is the authenticated session user.
+ */
+export const postLikes = pgTable('post_likes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  postId: uuid('post_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * Comments on a post (schema: public). `author_id` is the authenticated session
+ * user; the display name/avatar are resolved by joining `profiles`/`user` at
+ * read time (never stored here), matching the notifications pattern.
+ */
+export const postComments = pgTable('post_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  postId: uuid('post_id').notNull(),
+  authorId: uuid('author_id').notNull(),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * Poll votes (schema: public). One vote per user per poll enforced by the
+ * unique `(post_id, user_id)` index, so changing a vote is an upsert. The vote
+ * is index-based (`option_index` aligns to the poll's `options[]` array in the
+ * post payload), matching the existing client poll shape. Tallies are computed
+ * with `GROUP BY option_index` and never stored back into the payload.
+ */
+export const pollVotes = pgTable('poll_votes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  postId: uuid('post_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  optionIndex: integer('option_index').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * Event RSVPs (schema: public). One RSVP per user per event post enforced by
+ * the unique `(post_id, user_id)` index, so setting/updating an RSVP is an
+ * upsert. `status` is free-text (`going | interested | not_going` today) to
+ * stay flexible. This is the server-backed successor to the current
+ * localStorage `aspira-parent-event-rsvp`, but nothing is migrated yet.
+ */
+export const eventRsvps = pgTable('event_rsvps', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  postId: uuid('post_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  status: text('status').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })

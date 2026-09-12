@@ -213,3 +213,123 @@ export function ensureNotificationsTable(): Promise<void> {
   }
   return notificationsReady
 }
+
+/**
+ * Lazily provisions the DB-backed User Posts tables (`public.posts`,
+ * `public.post_likes`, `public.post_comments`, `public.poll_votes`,
+ * `public.event_rsvps`) and their supporting indexes/constraints, following the
+ * exact same idempotent (`IF NOT EXISTS`), memoized, schema-qualified pattern as
+ * the helpers above. No foreign keys to `neon_auth`, matching the existing
+ * Aspira convention. This is purely additive: it creates new tables only and
+ * never touches any existing table or data.
+ *
+ * Uniqueness that makes interactions idempotent (a single like / vote / rsvp
+ * per user per post) is enforced by unique indexes here rather than inline
+ * constraints, so the server actions can rely on plain upsert/toggle logic.
+ */
+let postsReady: Promise<void> | null = null
+export function ensurePostsTables(): Promise<void> {
+  if (!postsReady) {
+    postsReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.posts (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          author_id uuid NOT NULL,
+          type text NOT NULL,
+          body text,
+          scope text,
+          payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      // Feed queries filter by scope (null = Home, slug = space) and sort newest
+      // first; the author index covers "posts by this user" lookups.
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS posts_scope_created
+        ON public.posts (scope, created_at DESC)
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS posts_author
+        ON public.posts (author_id)
+      `)
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.post_likes (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          post_id uuid NOT NULL,
+          user_id uuid NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      // One like per user per post -> makes the like a pure toggle and the count
+      // a COUNT(*).
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS post_likes_unique
+        ON public.post_likes (post_id, user_id)
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS post_likes_post
+        ON public.post_likes (post_id)
+      `)
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.post_comments (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          post_id uuid NOT NULL,
+          author_id uuid NOT NULL,
+          body text NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS post_comments_post_created
+        ON public.post_comments (post_id, created_at)
+      `)
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.poll_votes (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          post_id uuid NOT NULL,
+          user_id uuid NOT NULL,
+          option_index integer NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      // One vote per user per poll -> changing a vote is an upsert on this key.
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS poll_votes_unique
+        ON public.poll_votes (post_id, user_id)
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS poll_votes_post
+        ON public.poll_votes (post_id)
+      `)
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.event_rsvps (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          post_id uuid NOT NULL,
+          user_id uuid NOT NULL,
+          status text NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      // One RSVP per user per event post -> setting/updating an RSVP is an upsert.
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS event_rsvps_unique
+        ON public.event_rsvps (post_id, user_id)
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS event_rsvps_post
+        ON public.event_rsvps (post_id)
+      `)
+    })().catch((error) => {
+      // Reset so a transient failure can be retried on the next call.
+      postsReady = null
+      throw error
+    })
+  }
+  return postsReady
+}
