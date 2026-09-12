@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input"
 import { PostComposer, type Draft } from "@/components/parent/post-composer"
 import { PostCard } from "@/components/parent/post-card"
-import { useFeedStore, draftToPost, readPostFocus, clearPostFocus } from "@/components/parent/feed-store"
+import { useFeedStore, createServerPost, useServerFeed, readPostFocus, clearPostFocus } from "@/components/parent/feed-store"
 import { useSocialStore } from "@/components/parent/social-store"
 import { CURRENT_PARENT, INVITE_CONTACTS, otherMemberNames } from "@/lib/parent-data"
 
@@ -26,7 +26,8 @@ function initialsOf(name: string) {
 
 export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; slug: string }) {
   const { getSpace, joined, toggleJoined, following, toggleFollowing, isAdmin, getAdmins, makeAdmin, leaveSpace, removeSpace, removeMember, getRemovedMembers, hydrated } = useSocialStore()
-  const { posts, addPost, removePost, removePostsByScope } = useFeedStore()
+  const { posts, removePost, removePostsByScope } = useFeedStore()
+  const { posts: serverPosts, mutate: mutateFeed } = useServerFeed(slug)
   const router = useRouter()
   const [invited, setInvited] = useState<string[]>([])
   const [muted, setMuted] = useState(false)
@@ -146,7 +147,10 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const memberCount = record.members + (isMember ? 1 : 0) + invitedContacts.length - removedForSpace.length
   // Single source of truth: the current parent appears in the roster only while actually a member.
   const rosterNames = isMember ? [CURRENT_PARENT, ...otherMembers] : otherMembers
-  const feedPosts = posts.filter((post) => post.scope === slug)
+  // DB-backed posts for this space (newest) above the existing seed/localStorage posts. IDs are
+  // distinct UUIDs, so there is never a duplicate with a seed or an older local post.
+  const serverIds = new Set(serverPosts.map((post) => post.id))
+  const feedPosts = [...serverPosts, ...posts.filter((post) => post.scope === slug)]
 
   // --- Admin leave rules --------------------------------------------------
   // Admins besides the current parent. If any remain, the parent may leave freely because at
@@ -162,8 +166,9 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const mustTransferBeforeLeaving = isSoleAdmin && transferCandidates.length > 0
   const soleAdminNoOthers = isSoleAdmin && transferCandidates.length === 0
 
-  function handlePost(draft: Draft) {
-    addPost(draftToPost(draft, { author: CURRENT_PARENT, subtitle: `Parent of Aarav Kapoor · ${record!.title}`, avatar: "/avatar-rashi.png", scope: slug }))
+  async function handlePost(draft: Draft) {
+    await createServerPost(draft, { author: CURRENT_PARENT, subtitle: `Parent of Aarav Kapoor · ${record!.title}`, avatar: "/avatar-rashi.png", scope: slug })
+    await mutateFeed()
   }
 
   async function copyLink() {
@@ -279,7 +284,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
             </Card>
           )}
           {feedPosts.length ? (
-            feedPosts.map((post) => <div key={post.id} className={focusedId === post.id ? "rounded-2xl ring-4 ring-brand/35 ring-offset-4 ring-offset-lavender transition-all" : "transition-all"}><PostCard post={post} onRemove={hasFullAccess ? () => removePost(post.id) : undefined} /></div>)
+            feedPosts.map((post) => <div key={post.id} className={focusedId === post.id ? "rounded-2xl ring-4 ring-brand/35 ring-offset-4 ring-offset-lavender transition-all" : "transition-all"}><PostCard post={post} onRemove={hasFullAccess && !serverIds.has(post.id) ? () => removePost(post.id) : undefined} /></div>)
           ) : (
             <Card className="border-dashed"><CardContent className="flex flex-col items-center gap-2 p-10 text-center"><span className="grid size-12 place-items-center rounded-2xl bg-brand-muted text-brand"><Users className="size-6" /></span><p className="font-semibold">No posts yet</p><p className="text-sm text-muted-foreground">Be the first to share an update with this {isGroup ? "group" : "community"}.</p></CardContent></Card>
           )}
