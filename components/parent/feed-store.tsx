@@ -182,6 +182,11 @@ export function postViewToFeedPost(view: PostView): FeedPost {
     hiddenByMe: view.hiddenByMe,
     likedByMe: view.likedByMe,
     myRsvp: view.myRsvp ?? undefined,
+    serverBacked: true,
+    eventGoingCount: view.rsvpGoingCount,
+    eventInterestedCount: view.rsvpInterestedCount,
+    eventGoingNames: view.rsvpGoing.map((u) => u.name ?? "Parent"),
+    eventInterestedNames: view.rsvpInterested.map((u) => u.name ?? "Parent"),
   }
 }
 

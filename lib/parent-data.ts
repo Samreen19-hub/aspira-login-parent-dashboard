@@ -101,6 +101,20 @@ export interface FeedPost {
    * "interested"), read from the server. Undefined for seed/localStorage posts.
    */
   myRsvp?: string
+  /**
+   * True only for a DB-backed post that came from the server feed. For these
+   * posts the resolved DB author is authoritative, so the event organizer must
+   * be derived from `author` and never from the (possibly stale) payload value.
+   */
+  serverBacked?: boolean
+  /** Aggregate "going" count for a DB-backed event post (all users). */
+  eventGoingCount?: number
+  /** Aggregate "interested" count for a DB-backed event post (all users). */
+  eventInterestedCount?: number
+  /** Display names of users marked "going", for the participant list. */
+  eventGoingNames?: string[]
+  /** Display names of users marked "interested", for the participant list. */
+  eventInterestedNames?: string[]
 }
 
 export interface SocialSpace {
