@@ -221,7 +221,7 @@ export function EventsView() {
             event={event}
             rsvp={rsvpView[event.id]}
             onOpen={() => setOpenId(event.id)}
-            onToggleInterested={() => setInterest(event, rsvpView[event.id] ? null : "interested")}
+            onSetRsvp={(state) => setInterest(event, state)}
             onShare={() => share(event)}
           />
         ))}
