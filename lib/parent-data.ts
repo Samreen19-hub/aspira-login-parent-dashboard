@@ -84,6 +84,12 @@ export interface FeedPost {
    * author-only Delete control is offered in the UI.
    */
   isMine?: boolean
+  /**
+   * True only for a DB-backed post the signed-in user has hidden from their own
+   * feed. Set from the server; undefined for seed/localStorage posts. Used by the
+   * Saved Posts view to surface the "hidden from your feed" state and Unhide.
+   */
+  hiddenByMe?: boolean
 }
 
 export interface SocialSpace {
