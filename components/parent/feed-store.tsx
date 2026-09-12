@@ -173,6 +173,7 @@ export function postViewToFeedPost(view: PostView): FeedPost {
     event: payload.event,
     scope: view.scope ?? undefined,
     isMine: view.isMine,
+    hiddenByMe: view.hiddenByMe,
   }
 }
 

@@ -13,7 +13,8 @@ import { Input } from "@/components/ui/input"
 import { PostComposer, type Draft } from "@/components/parent/post-composer"
 import { PostCard } from "@/components/parent/post-card"
 import { useFeedStore, createServerPost, useServerFeed, readPostFocus, clearPostFocus } from "@/components/parent/feed-store"
-import { deletePost, hidePost } from "@/app/actions/posts"
+import { PostHiddenNotice } from "@/components/parent/post-hidden-notice"
+import { deletePost, hidePost, unhidePost } from "@/app/actions/posts"
 import { useSocialStore } from "@/components/parent/social-store"
 import { CURRENT_PARENT, INVITE_CONTACTS, otherMemberNames } from "@/lib/parent-data"
 
@@ -43,6 +44,9 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const [makeAdminTarget, setMakeAdminTarget] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [focusedId, setFocusedId] = useState<string | null>(null)
+  // Id of the post just hidden via the DB-backed action, driving the temporary
+  // "Post hidden" + Undo confirmation. Null when no confirmation is showing.
+  const [hiddenNoticeId, setHiddenNoticeId] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
   const record = getSpace(slug)
@@ -284,13 +288,15 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
               </CardContent>
             </Card>
           )}
+          {hiddenNoticeId && <PostHiddenNotice onUndo={async () => { const id = hiddenNoticeId; setHiddenNoticeId(null); await unhidePost(id); await mutateFeed() }} onDismiss={() => setHiddenNoticeId(null)} />}
           {feedPosts.length ? (
             feedPosts.map((post) => {
               const isServer = serverIds.has(post.id)
               // DB-backed posts hide/delete via the server actions then revalidate this
               // space feed; Delete is author-only (post.isMine). Seed/localStorage posts
               // keep the existing member-only local removal for both actions, unchanged.
-              const onHide = isServer ? async () => { await hidePost(post.id); await mutateFeed() } : hasFullAccess ? () => removePost(post.id) : undefined
+              // DB-backed hide also shows the temporary Undo confirmation.
+              const onHide = isServer ? async () => { await hidePost(post.id); await mutateFeed(); setHiddenNoticeId(post.id) } : hasFullAccess ? () => removePost(post.id) : undefined
               const onDelete = isServer ? (post.isMine ? async () => { await deletePost(post.id); await mutateFeed() } : undefined) : hasFullAccess ? () => removePost(post.id) : undefined
               return <div key={post.id} className={focusedId === post.id ? "rounded-2xl ring-4 ring-brand/35 ring-offset-4 ring-offset-lavender transition-all" : "transition-all"}><PostCard post={post} onHide={onHide} onDelete={onDelete} /></div>
             })

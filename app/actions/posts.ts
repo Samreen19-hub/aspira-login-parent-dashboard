@@ -71,6 +71,13 @@ export type PostView = {
   /** The signed-in user's RSVP status for an event post, or null. */
   myRsvp: string | null
   /**
+   * True when the signed-in user has hidden this post from their own feed
+   * (a viewer-scoped `post_hides` marker exists). The feed never returns hidden
+   * posts, so this is only meaningful for reads that intentionally include them
+   * (e.g. Saved Posts), where it drives the "hidden from your feed" indicator.
+   */
+  hiddenByMe: boolean
+  /**
    * True when the signed-in user is the post's author. Resolved server-side and
    * used by the UI to decide whether to offer the author-only Delete control.
    * Delete is still enforced author-only in `deletePost` regardless of this.
@@ -164,6 +171,7 @@ export async function createPost(input: CreatePostInput): Promise<PostView> {
     likedByMe: false,
     commentCount: 0,
     comments: [],
+    hiddenByMe: false,
     pollTally: [],
     myVote: null,
     myRsvp: null,
@@ -344,6 +352,16 @@ async function annotatePosts(
   const myRsvp = new Map<string, string>()
   for (const rsvp of rsvpRows) myRsvp.set(rsvp.postId, rsvp.status)
 
+  // Which of these posts the signed-in user has hidden (viewer-scoped). The feed
+  // already excludes hidden posts; this only matters for reads that include them
+  // (Saved Posts) so the UI can surface the hidden state and an Unhide action.
+  const hideRows = await db
+    .select({ postId: postHides.postId })
+    .from(postHides)
+    .where(and(inArray(postHides.postId, postIds), eq(postHides.userId, meId)))
+  const hiddenByMe = new Set<string>()
+  for (const hide of hideRows) hiddenByMe.add(hide.postId)
+
   // Resolve author display info for post authors and comment authors together.
   const authorIds = new Set<string>()
   for (const p of postRows) authorIds.add(p.authorId)
@@ -394,6 +412,7 @@ async function annotatePosts(
       pollTally: normalizeTally(pollTally.get(p.id) ?? []),
       myVote: myVote.has(p.id) ? myVote.get(p.id)! : null,
       myRsvp: myRsvp.get(p.id) ?? null,
+      hiddenByMe: hiddenByMe.has(p.id),
       isMine: p.authorId === meId,
     }
   })
