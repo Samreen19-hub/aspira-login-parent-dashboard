@@ -239,6 +239,55 @@ export async function getFeed(
 }
 
 /**
+ * Loads every DB-backed EVENT post the signed-in user may see, across scopes, so
+ * the Events page can render server events from all sources through the SAME
+ * `public.posts` pipeline the Home feed uses (no separate event store). Included:
+ *   - unscoped (Home) events by the viewer, their accepted connections, or people
+ *     they follow — identical gating to `getFeed(null)`, enforced in SQL; and
+ *   - events scoped to any group/community slug the viewer passes in (their live
+ *     joined/following membership). Final per-source visibility is still applied
+ *     client-side by `toEventView`, so this only widens the candidate set.
+ * Viewer-hidden posts are excluded. Read-only; reuses `annotatePosts` so the
+ * shape (counts, my rsvp, participant lists) matches the rest of the feed.
+ */
+export async function getVisibleEvents(scopes: string[]): Promise<PostView[]> {
+  const meId = await getUserId()
+  await ensurePostsTables()
+  await ensurePostHidesTable()
+  await ensureFollowsTable()
+
+  const allowedAuthorIds = await getVisibleHomeAuthorIds(meId)
+  const scopeList = Array.from(new Set((scopes ?? []).filter(Boolean)))
+
+  const hiddenSubquery = db
+    .select({ id: postHides.postId })
+    .from(postHides)
+    .where(eq(postHides.userId, meId))
+
+  const homeVisible = and(
+    sql`${posts.scope} IS NULL`,
+    inArray(posts.authorId, allowedAuthorIds),
+  )
+  const scopeVisible = scopeList.length
+    ? inArray(posts.scope, scopeList)
+    : sql`false`
+
+  const postRows = await db
+    .select()
+    .from(posts)
+    .where(
+      and(
+        eq(posts.type, 'event'),
+        sql`${posts.id} NOT IN (${hiddenSubquery})`,
+        or(homeVisible, scopeVisible),
+      ),
+    )
+    .orderBy(desc(posts.createdAt))
+
+  return annotatePosts(postRows, meId)
+}
+
+/**
  * Resolves the set of author ids whose Home (unscoped) posts the viewer may see:
  * the viewer themselves, everyone they have an ACCEPTED connection with (either
  * direction), and everyone they follow. Always includes `meId`, so the returned

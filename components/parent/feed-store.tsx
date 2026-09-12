@@ -1,10 +1,10 @@
 "use client"
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
 import useSWR from "swr"
 import { FEED_POSTS, SPACE_FEED_POSTS, SEED_EVENTS, DEFAULT_RSVP, type FeedPost, type EventSource } from "@/lib/parent-data"
 import type { Draft } from "@/components/parent/post-composer"
-import { createPost, getFeed, type PostView } from "@/app/actions/posts"
+import { createPost, getFeed, getVisibleEvents, setRsvp as setRsvpAction, type PostView } from "@/app/actions/posts"
 
 const INITIAL_POSTS: FeedPost[] = [...FEED_POSTS, ...SPACE_FEED_POSTS, ...SEED_EVENTS]
 /** Seeds re-added on hydration if a returning user's stored feed is missing them (scoped feeds + events). */
@@ -190,19 +190,81 @@ export function postViewToFeedPost(view: PostView): FeedPost {
   }
 }
 
+/** The one RSVP state a user can hold per event, plus the cleared sentinel. */
+export type RsvpStatus = "going" | "interested" | "none"
+
+/**
+ * Applies a single-RSVP-per-user transition to a cached PostView list for an
+ * instant, consistent optimistic update. Moving between states adjusts BOTH
+ * aggregate counts (e.g. going -> interested decrements going, increments
+ * interested); the sentinel "none" clears the viewer's RSVP. Counts never go
+ * negative. The server revalidation that follows replaces these with the
+ * authoritative values (and refreshes participant name lists).
+ */
+function applyOptimisticRsvp(list: PostView[], postId: string, status: RsvpStatus): PostView[] {
+  return list.map((post) => {
+    if (post.id !== postId) return post
+    const prev = post.myRsvp
+    let going = post.rsvpGoingCount
+    let interested = post.rsvpInterestedCount
+    if (prev === "going") going = Math.max(0, going - 1)
+    if (prev === "interested") interested = Math.max(0, interested - 1)
+    if (status === "going") going += 1
+    if (status === "interested") interested += 1
+    return { ...post, myRsvp: status === "none" ? null : status, rsvpGoingCount: going, rsvpInterestedCount: interested }
+  })
+}
+
+/**
+ * Shared SWR wiring for a DB-backed post list: maps rows to FeedPost and exposes
+ * an optimistic RSVP setter. `setRsvpOptimistic` updates the cache immediately
+ * (so the event card AND the details dialog move together, with no round-trip
+ * flicker), persists through the existing `setRsvp` server action against
+ * `public.event_rsvps`, then revalidates to the authoritative counts. On error
+ * it rolls back. This is the single RSVP entry point for every DB-backed event
+ * surface, guaranteeing identical counts wherever the event is shown.
+ */
+function useDbFeed(key: unknown[], fetcher: () => Promise<PostView[]>) {
+  const { data, mutate } = useSWR(key, fetcher, { revalidateOnFocus: false })
+  const posts = useMemo(() => (data ?? []).map(postViewToFeedPost), [data])
+  const setRsvpOptimistic = useCallback(
+    (postId: string, status: RsvpStatus) =>
+      mutate(
+        async () => {
+          await setRsvpAction(postId, status)
+          return fetcher()
+        },
+        {
+          optimisticData: (current?: PostView[]) => applyOptimisticRsvp(current ?? [], postId, status),
+          rollbackOnError: true,
+          revalidate: false,
+        },
+      ),
+    // `fetcher` is a fresh closure each render; `mutate` is stable per SWR key.
+    [mutate], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+  return { posts, mutate, setRsvpOptimistic }
+}
+
 /**
  * Loads the DB-backed posts for a feed scope (null = Home feed) and maps them to
  * FeedPost. Used ALONGSIDE the existing seed/localStorage posts — it never
- * replaces them. Returns a `mutate` to refresh after creating a post.
+ * replaces them. Returns a `mutate` to refresh after creating a post and an
+ * optimistic RSVP setter.
  */
 export function useServerFeed(scope?: string | null) {
-  const { data, mutate } = useSWR(
-    ["server-feed", scope ?? "__home__"],
-    () => getFeed(scope ?? null),
-    { revalidateOnFocus: false },
-  )
-  const posts = useMemo(() => (data ?? []).map(postViewToFeedPost), [data])
-  return { posts, mutate }
+  return useDbFeed(["server-feed", scope ?? "__home__"], () => getFeed(scope ?? null))
+}
+
+/**
+ * Loads every DB-backed event the signed-in user can see across the given scopes
+ * (their joined groups + followed communities), plus their visible Home events —
+ * all from the same `public.posts` pipeline. This is how the Events page renders
+ * server events from every source without a separate event store or table.
+ */
+export function useVisibleEvents(scopes: string[]) {
+  const scopeKey = [...scopes].sort().join(",")
+  return useDbFeed(["visible-events", scopeKey], () => getVisibleEvents(scopes))
 }
 
 type FeedStoreValue = {
