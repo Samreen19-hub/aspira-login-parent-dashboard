@@ -6,8 +6,7 @@ import { CalendarX2, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { useFeedStore, draftToPost, useServerFeed, type RsvpState } from "@/components/parent/feed-store"
-import { setRsvp as setRsvpAction } from "@/app/actions/posts"
+import { useFeedStore, createServerPost, useVisibleEvents, type RsvpState } from "@/components/parent/feed-store"
 import { useSocialStore } from "@/components/parent/social-store"
 import { PostComposer, type Draft, type EventDestination } from "@/components/parent/post-composer"
 import { EventCard } from "@/components/parent/event-card"
@@ -40,11 +39,14 @@ function orderByTime(list: EventView[]) {
 }
 
 export function EventsView() {
-  const { posts, addPost, updatePost, removePost, rsvp, setRsvp } = useFeedStore()
+  const { posts, updatePost, removePost, rsvp, setRsvp } = useFeedStore()
   const social = useSocialStore()
-  // DB-backed posts (home scope) — the same server feed Home uses — so newly
-  // created event posts in public.posts (type='event') appear here too.
-  const { posts: serverPosts, mutate: mutateFeed } = useServerFeed(null)
+  // DB-backed events across every source the parent can see (their Home events
+  // plus events in joined groups / followed communities) — all from the same
+  // public.posts pipeline the Home feed uses. Newly created event posts appear
+  // here through this feed, never a separate local store.
+  const eventScopes = useMemo(() => [...social.joined, ...social.following], [social.joined, social.following])
+  const { posts: serverPosts, mutate: mutateFeed, setRsvpOptimistic } = useVisibleEvents(eventScopes)
 
   // Server events surface alongside the existing seed/local posts. IDs never
   // collide (server UUIDs vs. seed/`post-` ids), so a plain concat is safe.
@@ -140,7 +142,7 @@ export function EventsView() {
   const activeView = openId ? events.find((e) => e.id === openId) ?? null : null
   const activeDetail = openId ? allPosts.find((p) => p.id === openId)?.event : undefined
 
-  function handleCreate(draft: Draft) {
+  async function handleCreate(draft: Draft) {
     const destination = draft.event?.destination ?? "connections"
     let source: EventSource = "connections"
     let slug: string | undefined
@@ -152,19 +154,22 @@ export function EventsView() {
       source = kind === "group" ? "group" : kind === "community" ? "community" : "connections"
     }
     const space = slug ? social.getSpace(slug) : undefined
-    const organizer = space ? space.title : CURRENT_PARENT
     const subtitle = space ? space.title : source === "private" ? "Private event" : "Shared with connections"
-    addPost(
-      draftToPost(draft, {
-        author: CURRENT_PARENT,
-        role: "Parent",
-        subtitle,
-        avatar: "/avatar-rashi.png",
-        scope: slug,
-        eventSource: source,
-        eventOrganizer: organizer,
-      }),
-    )
+    // Create through the SAME DB-backed post action the Home Feed uses. The
+    // authoritative author is the authenticated session user (set server-side);
+    // the payload author/organizer below are only display fallbacks and are
+    // overridden by the real creator in buildEventView for server events. This
+    // is why the organizer is always the creator (Mujtaba/Samreen), never the
+    // legacy CURRENT_PARENT, and why the event shows up in the Home Feed too.
+    await createServerPost(draft, {
+      author: CURRENT_PARENT,
+      role: "Parent",
+      subtitle,
+      avatar: "/avatar-rashi.png",
+      scope: slug,
+      eventSource: source,
+    })
+    await mutateFeed()
     notify("Event created")
   }
 
@@ -182,11 +187,12 @@ export function EventsView() {
 
   function setInterest(event: EventView, state: RsvpState | null) {
     if (serverIds.has(event.id)) {
-      // DB-backed event: persist through the existing server action
-      // (public.event_rsvps, authenticated user). There is no delete action, so
-      // clearing stores a sentinel "none" status that rsvpView treats as no RSVP
-      // — this persists correctly across refresh and is visible to other users.
-      void setRsvpAction(event.id, state ?? "none").then(() => mutateFeed())
+      // DB-backed event: one RSVP per user in public.event_rsvps. The optimistic
+      // setter updates the shared cache instantly (so the card and the details
+      // dialog move together), persists via the existing setRsvp action, then
+      // revalidates to authoritative counts. Clearing sends the "none" sentinel,
+      // which rsvpView treats as no RSVP and persists across refresh.
+      void setRsvpOptimistic(event.id, state ?? "none")
     } else {
       setRsvp(event.id, state)
     }
