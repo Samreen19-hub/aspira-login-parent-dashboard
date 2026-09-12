@@ -1,10 +1,11 @@
 "use client"
 
-import { CalendarDays, Clock3, MapPin, Users, Star, Share2 } from "lucide-react"
+import { CalendarDays, Clock3, MapPin, Users, Share2 } from "lucide-react"
 import Image from "next/image"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { EventRsvpBar } from "@/components/parent/event-rsvp-bar"
 import type { EventView } from "@/lib/events"
 import type { EventSource } from "@/lib/parent-data"
 import type { RsvpState } from "@/components/parent/feed-store"
@@ -21,16 +22,15 @@ export function EventCard({
   event,
   rsvp,
   onOpen,
-  onToggleInterested,
+  onSetRsvp,
   onShare,
 }: {
   event: EventView
   rsvp?: RsvpState
   onOpen: () => void
-  onToggleInterested: () => void
+  onSetRsvp: (state: RsvpState | null) => void
   onShare: () => void
 }) {
-  const interested = rsvp === "interested" || rsvp === "going"
   return (
     <Card className="gap-0 overflow-hidden p-0">
       <div className="flex flex-col gap-4 p-5 sm:flex-row">
@@ -61,14 +61,24 @@ export function EventCard({
             <span className="flex items-center gap-1.5"><Users className="size-4 shrink-0 text-brand" /><span className="truncate">{event.organizer}</span></span>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-2">
+          {event.description && (
+            <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground text-pretty">{event.description}</p>
+          )}
+
+          {!event.isPast && (
+            <div className="mt-3">
+              <EventRsvpBar
+                rsvp={rsvp}
+                goingCount={event.goingCount}
+                interestedCount={event.interestedCount}
+                onSetRsvp={onSetRsvp}
+                size="sm"
+              />
+            </div>
+          )}
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button size="sm" className="rounded-lg" onClick={onOpen}>View details</Button>
-            {!event.isPast && (
-              <Button size="sm" variant={interested ? "secondary" : "outline"} className="gap-1.5 rounded-lg" onClick={onToggleInterested} aria-pressed={interested}>
-                <Star className={`size-4 ${interested ? "fill-current text-brand" : ""}`} />
-                {interested ? "Interested" : "Mark interested"}
-              </Button>
-            )}
             <Button size="sm" variant="outline" className="gap-1.5 rounded-lg" onClick={onShare}>
               <Share2 className="size-4" />
               <span className="sr-only sm:not-sr-only">Share</span>

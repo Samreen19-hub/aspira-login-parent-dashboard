@@ -27,6 +27,16 @@ export interface EventView {
   canManage: boolean
   attendees: number
   attendeeNames: string[]
+  /** The signed-in user's RSVP for this event ("going"/"interested"), if any. */
+  myRsvp?: "going" | "interested"
+  /** Number of users marked "going" (from the DB for server-backed events). */
+  goingCount: number
+  /** Number of users marked "interested" (from the DB for server-backed events). */
+  interestedCount: number
+  /** Display names of users marked "going". */
+  goingNames: string[]
+  /** Display names of users marked "interested". */
+  interestedNames: string[]
 }
 
 const SOURCE_LABELS: Record<EventSource, string> = {
@@ -109,7 +119,7 @@ export function toEventView(post: FeedPost, membership: Membership, now: Date): 
   if (post.type !== "event" || !post.event) return null
   const space = post.scope ? membership.getSpace(post.scope) : undefined
   const source = resolveSource(post, space)
-  const isMine = post.author === CURRENT_PARENT
+  const isMine = post.isMine ?? post.author === CURRENT_PARENT
 
   // Membership-based visibility. Membership is the single source of truth (the social store).
   if (!isMine) {
@@ -118,20 +128,58 @@ export function toEventView(post: FeedPost, membership: Membership, now: Date): 
     if (source === "private") return null
   }
 
+  const spaceEditable = !!post.scope && membership.isAdmin(post.scope)
+  return buildEventView(post, { space, isMine, spaceEditable, now })
+}
+
+/**
+ * Builds the presentation-ready EventView for an event post WITHOUT any
+ * membership/visibility gating. This is the single event view model — the Events
+ * page reaches it through `toEventView` (which adds visibility rules), while the
+ * Home Feed uses it directly so it renders exactly the event posts already in the
+ * home feed. The organizer and RSVP resolution below are shared by both surfaces,
+ * guaranteeing identical data everywhere the event is shown.
+ */
+export function buildEventView(
+  post: FeedPost,
+  opts: { space?: SocialSpace; isMine?: boolean; spaceEditable?: boolean; now?: Date },
+): EventView {
+  const event = post.event!
+  const { space, spaceEditable = false } = opts
+  const now = opts.now ?? new Date()
+  const source = resolveSource(post, space)
+  const isMine = opts.isMine ?? (post.isMine ?? post.author === CURRENT_PARENT)
+
   const start = resolveStart(post)
   const isPast = start.getTime() < now.getTime()
-  const spaceEditable = !!post.scope && membership.isAdmin(post.scope)
   const canManage = source !== "school" && (isMine || spaceEditable)
-  const attendeeNames = space ? space.memberNames.slice(0, 4) : []
-  const attendees = post.likes || attendeeNames.length
+
+  // Organizer resolution. For a DB-backed (server) event the resolved post
+  // author is the authoritative creator, so it always wins — the JSONB payload
+  // may carry a stale organizer (e.g. the legacy "Rashi Kapoor") that must never
+  // be shown. Seed/localStorage events fall back to their stored organizer,
+  // then the owning space title, then the author.
+  const organizer = post.serverBacked
+    ? post.author
+    : event.organizer ?? space?.title ?? post.author
+
+  // RSVP aggregates. Server-backed events carry real per-user counts and
+  // participant names from the DB; seed events approximate with space members.
+  const myRsvp = post.myRsvp === "going" || post.myRsvp === "interested" ? post.myRsvp : undefined
+  const goingNames = post.eventGoingNames ?? []
+  const interestedNames = post.eventInterestedNames ?? (space ? space.memberNames.slice(0, 4) : [])
+  const goingCount = post.eventGoingCount ?? goingNames.length
+  const interestedCount = post.eventInterestedCount ?? interestedNames.length
+  const attendeeNames = goingNames.length || interestedNames.length ? [...goingNames, ...interestedNames] : space ? space.memberNames.slice(0, 4) : []
+  const attendees = post.serverBacked ? goingCount + interestedCount : post.likes || attendeeNames.length
 
   return {
     id: post.id,
-    title: post.event.title,
-    description: post.event.description,
-    location: post.event.location,
-    organizer: post.event.organizer ?? space?.title ?? post.author,
-    cover: post.event.cover,
+    title: event.title,
+    description: event.description,
+    location: event.location,
+    organizer,
+    cover: event.cover,
     author: post.author,
     avatar: post.avatar,
     source,
@@ -139,12 +187,17 @@ export function toEventView(post: FeedPost, membership: Membership, now: Date): 
     spaceTitle: space?.title,
     spaceSlug: space?.slug,
     dateLabel: formatDDMMYYYY(start),
-    timeLabel: post.event.endTime ? `${normalizeTimeLabel(post.event.time)} – ${normalizeTimeLabel(post.event.endTime)}` : normalizeTimeLabel(post.event.time),
+    timeLabel: event.endTime ? `${normalizeTimeLabel(event.time)} – ${normalizeTimeLabel(event.endTime)}` : normalizeTimeLabel(event.time),
     start,
     isPast,
     isMine,
     canManage,
     attendees,
     attendeeNames,
+    myRsvp,
+    goingCount,
+    interestedCount,
+    goingNames,
+    interestedNames,
   }
 }

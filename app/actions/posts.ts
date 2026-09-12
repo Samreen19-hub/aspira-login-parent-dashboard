@@ -70,6 +70,14 @@ export type PostView = {
   myVote: number | null
   /** The signed-in user's RSVP status for an event post, or null. */
   myRsvp: string | null
+  /** Total number of users marked "going" for an event post (all users). */
+  rsvpGoingCount: number
+  /** Total number of users marked "interested" for an event post (all users). */
+  rsvpInterestedCount: number
+  /** Users marked "going" (display info), for the event's participant list. */
+  rsvpGoing: PostAuthor[]
+  /** Users marked "interested" (display info), for the event's participant list. */
+  rsvpInterested: PostAuthor[]
   /**
    * True when the signed-in user has hidden this post from their own feed
    * (a viewer-scoped `post_hides` marker exists). The feed never returns hidden
@@ -175,6 +183,10 @@ export async function createPost(input: CreatePostInput): Promise<PostView> {
     pollTally: [],
     myVote: null,
     myRsvp: null,
+    rsvpGoingCount: 0,
+    rsvpInterestedCount: 0,
+    rsvpGoing: [],
+    rsvpInterested: [],
     isMine: true,
   }
 }
@@ -352,6 +364,32 @@ async function annotatePosts(
   const myRsvp = new Map<string, string>()
   for (const rsvp of rsvpRows) myRsvp.set(rsvp.postId, rsvp.status)
 
+  // Every user's RSVP for these posts, for the aggregate "going"/"interested"
+  // counts and the participant lists shown on the event card and details dialog.
+  // The sentinel "none" status (a cleared RSVP) is intentionally ignored.
+  const allRsvpRows = await db
+    .select({
+      postId: eventRsvps.postId,
+      userId: eventRsvps.userId,
+      status: eventRsvps.status,
+    })
+    .from(eventRsvps)
+    .where(inArray(eventRsvps.postId, postIds))
+  const goingIdsByPost = new Map<string, string[]>()
+  const interestedIdsByPost = new Map<string, string[]>()
+  for (const rsvp of allRsvpRows) {
+    const bucket =
+      rsvp.status === 'going'
+        ? goingIdsByPost
+        : rsvp.status === 'interested'
+          ? interestedIdsByPost
+          : null
+    if (!bucket) continue
+    const list = bucket.get(rsvp.postId) ?? []
+    list.push(rsvp.userId)
+    bucket.set(rsvp.postId, list)
+  }
+
   // Which of these posts the signed-in user has hidden (viewer-scoped). The feed
   // already excludes hidden posts; this only matters for reads that include them
   // (Saved Posts) so the UI can surface the hidden state and an Unhide action.
@@ -366,7 +404,11 @@ async function annotatePosts(
   const authorIds = new Set<string>()
   for (const p of postRows) authorIds.add(p.authorId)
   for (const c of commentRows) authorIds.add(c.authorId)
+  for (const ids of goingIdsByPost.values()) for (const id of ids) authorIds.add(id)
+  for (const ids of interestedIdsByPost.values()) for (const id of ids) authorIds.add(id)
   const authors = await resolveAuthors(Array.from(authorIds))
+  const toAuthorList = (ids: string[]) =>
+    ids.map((id) => authors.get(id) ?? { id, name: null, avatar: null })
 
   const commentsByPost = new Map<string, PostCommentView[]>()
   for (const c of commentRows) {
@@ -412,6 +454,10 @@ async function annotatePosts(
       pollTally: normalizeTally(pollTally.get(p.id) ?? []),
       myVote: myVote.has(p.id) ? myVote.get(p.id)! : null,
       myRsvp: myRsvp.get(p.id) ?? null,
+      rsvpGoingCount: (goingIdsByPost.get(p.id) ?? []).length,
+      rsvpInterestedCount: (interestedIdsByPost.get(p.id) ?? []).length,
+      rsvpGoing: toAuthorList(goingIdsByPost.get(p.id) ?? []),
+      rsvpInterested: toAuthorList(interestedIdsByPost.get(p.id) ?? []),
       hiddenByMe: hiddenByMe.has(p.id),
       isMine: p.authorId === meId,
     }
