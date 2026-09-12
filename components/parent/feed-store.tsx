@@ -170,10 +170,18 @@ export function postViewToFeedPost(view: PostView): FeedPost {
     poll: payload.poll
       ? { question: payload.poll.question ?? "", options, votes: options.map((_, i) => tally[i] ?? 0), voted: view.myVote ?? undefined }
       : undefined,
-    event: payload.event,
+    // For DB-backed events the organizer must be the actual authenticated post
+    // creator, not the legacy CURRENT_PARENT value stored in the JSONB payload
+    // at creation time. view.author.name is the real creator resolved server-side;
+    // fall back to the stored organizer only if it is somehow missing.
+    event: payload.event
+      ? { ...payload.event, organizer: view.author.name ?? payload.event.organizer }
+      : undefined,
     scope: view.scope ?? undefined,
     isMine: view.isMine,
     hiddenByMe: view.hiddenByMe,
+    likedByMe: view.likedByMe,
+    myRsvp: view.myRsvp ?? undefined,
   }
 }
 

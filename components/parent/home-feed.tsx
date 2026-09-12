@@ -37,6 +37,6 @@ export function HomeFeed({ childId }: { childId?: string }) {
     // and shows the temporary Undo confirmation (Undo calls unhidePost + revalidate).
     const onHide = isServer ? async () => { await hidePost(post.id); await mutate(); setHiddenNoticeId(post.id) } : () => removePost(post.id)
     const onDelete = isServer ? (post.isMine ? async () => { await deletePost(post.id); await mutate() } : undefined) : () => removePost(post.id)
-    return <div key={post.id} className={focusedId === post.id ? "rounded-2xl ring-4 ring-brand/35 ring-offset-4 ring-offset-lavender transition-all" : "transition-all"}><PostCard post={post} onHide={onHide} onDelete={onDelete} /></div>
+    return <div key={post.id} className={focusedId === post.id ? "rounded-2xl ring-4 ring-brand/35 ring-offset-4 ring-offset-lavender transition-all" : "transition-all"}><PostCard post={post} onHide={onHide} onDelete={onDelete} serverBacked={isServer} /></div>
   })}</div>
 }

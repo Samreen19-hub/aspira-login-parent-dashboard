@@ -298,7 +298,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
               // DB-backed hide also shows the temporary Undo confirmation.
               const onHide = isServer ? async () => { await hidePost(post.id); await mutateFeed(); setHiddenNoticeId(post.id) } : hasFullAccess ? () => removePost(post.id) : undefined
               const onDelete = isServer ? (post.isMine ? async () => { await deletePost(post.id); await mutateFeed() } : undefined) : hasFullAccess ? () => removePost(post.id) : undefined
-              return <div key={post.id} className={focusedId === post.id ? "rounded-2xl ring-4 ring-brand/35 ring-offset-4 ring-offset-lavender transition-all" : "transition-all"}><PostCard post={post} onHide={onHide} onDelete={onDelete} /></div>
+              return <div key={post.id} className={focusedId === post.id ? "rounded-2xl ring-4 ring-brand/35 ring-offset-4 ring-offset-lavender transition-all" : "transition-all"}><PostCard post={post} onHide={onHide} onDelete={onDelete} serverBacked={isServer} /></div>
             })
           ) : (
             <Card className="border-dashed"><CardContent className="flex flex-col items-center gap-2 p-10 text-center"><span className="grid size-12 place-items-center rounded-2xl bg-brand-muted text-brand"><Users className="size-6" /></span><p className="font-semibold">No posts yet</p><p className="text-sm text-muted-foreground">Be the first to share an update with this {isGroup ? "group" : "community"}.</p></CardContent></Card>
