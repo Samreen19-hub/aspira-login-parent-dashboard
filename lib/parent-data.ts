@@ -78,6 +78,12 @@ export interface FeedPost {
   event?: EventDetails
   /** When set, this post belongs to a specific group/community feed (by slug) and is kept out of the Home Feed. */
   scope?: string
+  /**
+   * True only for a DB-backed post authored by the signed-in user. Set from the
+   * server feed; undefined for seed/localStorage posts. Drives whether the
+   * author-only Delete control is offered in the UI.
+   */
+  isMine?: boolean
 }
 
 export interface SocialSpace {

@@ -333,3 +333,43 @@ export function ensurePostsTables(): Promise<void> {
   }
   return postsReady
 }
+
+/**
+ * Lazily provisions the `public.post_hides` table (and its supporting indexes)
+ * using the shared pool, following the exact same idempotent (`IF NOT EXISTS`),
+ * memoized, schema-qualified pattern as the helpers above. This is a purely
+ * additive, viewer-scoped filter table: a row means "this user hid this post
+ * from their own feed" and never touches the post itself or its interactions.
+ * No foreign keys to `neon_auth`, matching the existing Aspira convention.
+ */
+let postHidesReady: Promise<void> | null = null
+export function ensurePostHidesTable(): Promise<void> {
+  if (!postHidesReady) {
+    postHidesReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.post_hides (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          post_id uuid NOT NULL,
+          user_id uuid NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      // One hide per user per post -> hiding is idempotent and unhiding is an
+      // exact-match delete.
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS post_hides_unique
+        ON public.post_hides (post_id, user_id)
+      `)
+      // Covers "posts hidden by this viewer" lookups done while building a feed.
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS post_hides_user
+        ON public.post_hides (user_id)
+      `)
+    })().catch((error) => {
+      // Reset so a transient failure can be retried on the next call.
+      postHidesReady = null
+      throw error
+    })
+  }
+  return postHidesReady
+}
