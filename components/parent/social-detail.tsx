@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input"
 import { PostComposer, type Draft } from "@/components/parent/post-composer"
 import { PostCard } from "@/components/parent/post-card"
 import { useFeedStore, createServerPost, useServerFeed, readPostFocus, clearPostFocus } from "@/components/parent/feed-store"
+import { deletePost, hidePost } from "@/app/actions/posts"
 import { useSocialStore } from "@/components/parent/social-store"
 import { CURRENT_PARENT, INVITE_CONTACTS, otherMemberNames } from "@/lib/parent-data"
 
@@ -284,7 +285,15 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
             </Card>
           )}
           {feedPosts.length ? (
-            feedPosts.map((post) => <div key={post.id} className={focusedId === post.id ? "rounded-2xl ring-4 ring-brand/35 ring-offset-4 ring-offset-lavender transition-all" : "transition-all"}><PostCard post={post} onRemove={hasFullAccess && !serverIds.has(post.id) ? () => removePost(post.id) : undefined} /></div>)
+            feedPosts.map((post) => {
+              const isServer = serverIds.has(post.id)
+              // DB-backed posts hide/delete via the server actions then revalidate this
+              // space feed; Delete is author-only (post.isMine). Seed/localStorage posts
+              // keep the existing member-only local removal for both actions, unchanged.
+              const onHide = isServer ? async () => { await hidePost(post.id); await mutateFeed() } : hasFullAccess ? () => removePost(post.id) : undefined
+              const onDelete = isServer ? (post.isMine ? async () => { await deletePost(post.id); await mutateFeed() } : undefined) : hasFullAccess ? () => removePost(post.id) : undefined
+              return <div key={post.id} className={focusedId === post.id ? "rounded-2xl ring-4 ring-brand/35 ring-offset-4 ring-offset-lavender transition-all" : "transition-all"}><PostCard post={post} onHide={onHide} onDelete={onDelete} /></div>
+            })
           ) : (
             <Card className="border-dashed"><CardContent className="flex flex-col items-center gap-2 p-10 text-center"><span className="grid size-12 place-items-center rounded-2xl bg-brand-muted text-brand"><Users className="size-6" /></span><p className="font-semibold">No posts yet</p><p className="text-sm text-muted-foreground">Be the first to share an update with this {isGroup ? "group" : "community"}.</p></CardContent></Card>
           )}

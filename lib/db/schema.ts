@@ -234,3 +234,20 @@ export const eventRsvps = pgTable('event_rsvps', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
+
+/**
+ * Per-user hidden posts (schema: public). One row = one user hiding one post
+ * from their OWN feed only. This never deletes or mutates the original post or
+ * its interactions — it is a viewer-scoped filter, so a post hidden by one user
+ * stays fully visible to everyone else. `user_id` is the authenticated session
+ * user. The unique `(post_id, user_id)` index (created in `ensurePostHidesTable`)
+ * makes hiding idempotent. Following the existing Aspira convention this carries
+ * no foreign keys to `neon_auth.user`; provisioned lazily by
+ * `ensurePostHidesTable` (see `lib/db/index.ts`).
+ */
+export const postHides = pgTable('post_hides', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  postId: uuid('post_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})

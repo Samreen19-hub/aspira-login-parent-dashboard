@@ -172,6 +172,7 @@ export function postViewToFeedPost(view: PostView): FeedPost {
       : undefined,
     event: payload.event,
     scope: view.scope ?? undefined,
+    isMine: view.isMine,
   }
 }
 

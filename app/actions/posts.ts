@@ -1,13 +1,16 @@
 'use server'
 
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, or, sql } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { auth } from '@/lib/auth'
-import { db, ensurePostsTables } from '@/lib/db'
+import { db, ensureFollowsTable, ensurePostHidesTable, ensurePostsTables } from '@/lib/db'
 import {
+  connections,
   eventRsvps,
+  follows,
   pollVotes,
   postComments,
+  postHides,
   postLikes,
   posts,
   profiles,
@@ -67,6 +70,12 @@ export type PostView = {
   myVote: number | null
   /** The signed-in user's RSVP status for an event post, or null. */
   myRsvp: string | null
+  /**
+   * True when the signed-in user is the post's author. Resolved server-side and
+   * used by the UI to decide whether to offer the author-only Delete control.
+   * Delete is still enforced author-only in `deletePost` regardless of this.
+   */
+  isMine: boolean
 }
 
 type CreatePostInput = {
@@ -158,6 +167,7 @@ export async function createPost(input: CreatePostInput): Promise<PostView> {
     pollTally: [],
     myVote: null,
     myRsvp: null,
+    isMine: true,
   }
 }
 
@@ -173,14 +183,76 @@ export async function getFeed(
 ): Promise<PostView[]> {
   const meId = await getUserId()
   await ensurePostsTables()
+  await ensurePostHidesTable()
+
+  let scopeWhere
+  if (scope == null) {
+    // HOME FEED visibility, enforced in SQL (never hidden in React): a Home post
+    // is returned only when the viewer authored it, has an accepted connection
+    // with the author, or follows the author. The author always sees their own.
+    await ensureFollowsTable()
+    const allowedAuthorIds = await getVisibleHomeAuthorIds(meId)
+    scopeWhere = and(
+      sql`${posts.scope} IS NULL`,
+      inArray(posts.authorId, allowedAuthorIds),
+    )
+  } else {
+    // GROUP / COMMUNITY feeds keep their existing scope-based behavior. The
+    // connection/follow rule is intentionally NOT applied here; access is
+    // governed by the existing membership gate in the space view.
+    scopeWhere = eq(posts.scope, scope)
+  }
+
+  // Exclude posts the viewer has hidden (viewer-scoped; never deletes the post).
+  const hiddenSubquery = db
+    .select({ id: postHides.postId })
+    .from(postHides)
+    .where(eq(postHides.userId, meId))
 
   const postRows = await db
     .select()
     .from(posts)
-    .where(scope == null ? sql`${posts.scope} IS NULL` : eq(posts.scope, scope))
+    .where(and(scopeWhere, sql`${posts.id} NOT IN (${hiddenSubquery})`))
     .orderBy(desc(posts.createdAt))
 
   return annotatePosts(postRows, meId)
+}
+
+/**
+ * Resolves the set of author ids whose Home (unscoped) posts the viewer may see:
+ * the viewer themselves, everyone they have an ACCEPTED connection with (either
+ * direction), and everyone they follow. Always includes `meId`, so the returned
+ * array is never empty and the author always sees their own posts.
+ */
+async function getVisibleHomeAuthorIds(meId: string): Promise<string[]> {
+  const allowed = new Set<string>([meId])
+
+  const acceptedConnections = await db
+    .select({
+      requesterId: connections.requesterId,
+      recipientId: connections.recipientId,
+    })
+    .from(connections)
+    .where(
+      and(
+        eq(connections.status, 'accepted'),
+        or(
+          eq(connections.requesterId, meId),
+          eq(connections.recipientId, meId),
+        ),
+      ),
+    )
+  for (const conn of acceptedConnections) {
+    allowed.add(conn.requesterId === meId ? conn.recipientId : conn.requesterId)
+  }
+
+  const followingRows = await db
+    .select({ id: follows.followingId })
+    .from(follows)
+    .where(eq(follows.followerId, meId))
+  for (const row of followingRows) allowed.add(row.id)
+
+  return Array.from(allowed)
 }
 
 /**
@@ -322,8 +394,81 @@ async function annotatePosts(
       pollTally: normalizeTally(pollTally.get(p.id) ?? []),
       myVote: myVote.has(p.id) ? myVote.get(p.id)! : null,
       myRsvp: myRsvp.get(p.id) ?? null,
+      isMine: p.authorId === meId,
     }
   })
+}
+
+/**
+ * Permanently deletes a post AUTHORED BY the signed-in user, along with all of
+ * its dependent interaction rows (likes, comments, poll votes, event RSVPs) and
+ * any per-user hide markers. Author-only: the delete is scoped to
+ * `author_id = meId`, so a user can never delete someone else's post — a request
+ * for a post they do not own returns zero rows and throws. This affects only the
+ * DB-backed post; seed/localStorage posts are removed by the existing local
+ * store and never reach this action.
+ */
+export async function deletePost(postId: string): Promise<{ deleted: true }> {
+  const meId = await getUserId()
+  if (!postId) throw new Error('A valid post is required.')
+  await ensurePostsTables()
+
+  // Author-scoped delete: only the owner's row matches, so this both authorizes
+  // and performs the delete in one step.
+  const deleted = await db
+    .delete(posts)
+    .where(and(eq(posts.id, postId), eq(posts.authorId, meId)))
+    .returning({ id: posts.id })
+
+  if (deleted.length === 0) {
+    throw new Error('You can only delete your own post.')
+  }
+
+  // Remove dependent interactions so nothing dangles after the post is gone.
+  await db.delete(postLikes).where(eq(postLikes.postId, postId))
+  await db.delete(postComments).where(eq(postComments.postId, postId))
+  await db.delete(pollVotes).where(eq(pollVotes.postId, postId))
+  await db.delete(eventRsvps).where(eq(eventRsvps.postId, postId))
+  // Clean up any viewer hide markers for the now-deleted post.
+  await ensurePostHidesTable()
+  await db.delete(postHides).where(eq(postHides.postId, postId))
+
+  return { deleted: true }
+}
+
+/**
+ * Hides a post from the signed-in user's OWN feed only. This never deletes or
+ * modifies the post or any of its interactions — it inserts a viewer-scoped
+ * `post_hides` marker, so the post stays fully visible to everyone else.
+ * Idempotent via the unique `(post_id, user_id)` index.
+ */
+export async function hidePost(postId: string): Promise<{ hidden: true }> {
+  const userId = await getUserId()
+  if (!postId) throw new Error('A valid post is required.')
+  await ensurePostHidesTable()
+
+  await db
+    .insert(postHides)
+    .values({ postId, userId })
+    .onConflictDoNothing()
+
+  return { hidden: true }
+}
+
+/**
+ * Reverses `hidePost` for the signed-in user: removes only their own hide marker
+ * for the post, leaving the post and everyone else's view untouched.
+ */
+export async function unhidePost(postId: string): Promise<{ hidden: false }> {
+  const userId = await getUserId()
+  if (!postId) throw new Error('A valid post is required.')
+  await ensurePostHidesTable()
+
+  await db
+    .delete(postHides)
+    .where(and(eq(postHides.postId, postId), eq(postHides.userId, userId)))
+
+  return { hidden: false }
 }
 
 /**
