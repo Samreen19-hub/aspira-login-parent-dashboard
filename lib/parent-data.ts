@@ -97,10 +97,12 @@ export interface FeedPost {
    */
   likedByMe?: boolean
   /**
-   * The signed-in user's RSVP status for a DB-backed event post ("going" /
-   * "interested"), read from the server. Undefined for seed/localStorage posts.
+   * The signed-in user's INDEPENDENT RSVP flags for a DB-backed event post,
+   * read from the server. Going and Interested are independent entities — a
+   * user may be both at once. Undefined for seed/localStorage posts.
    */
-  myRsvp?: string
+  myGoing?: boolean
+  myInterested?: boolean
   /**
    * True only for a DB-backed post that came from the server feed. For these
    * posts the resolved DB author is authoritative, so the event organizer must
@@ -511,9 +513,12 @@ export const SEED_EVENTS: FeedPost[] = [
   makeEvent({ id: 'evt-my-past-meetup', author: CURRENT_PARENT, avatar: '/avatar-rashi.png', role: 'Parent', source: 'connections', organizer: CURRENT_PARENT, title: 'Class Coffee Catch-up', isoDate: '2026-06-14', time: '10:00 AM', endTime: '11:30 AM', location: 'Bloom Cafe', description: 'A casual morning coffee with a few parents from Aarav’s class.', likes: 8, shares: 0 }),
 ]
 
-/** Default RSVP seed so the "I'm Attending / Interested" section is demonstrable on a fresh device. */
-export const DEFAULT_RSVP: Record<string, 'going' | 'interested'> = {
-  'evt-sports-day': 'interested',
+/**
+ * Default RSVP seed so the "I'm Attending / Interested" section is demonstrable
+ * on a fresh device. Going and Interested are independent flags per event.
+ */
+export const DEFAULT_RSVP: Record<string, { going: boolean; interested: boolean }> = {
+  'evt-sports-day': { going: false, interested: true },
 }
 
 /** Contact pool used by the "Invite members" flow. */

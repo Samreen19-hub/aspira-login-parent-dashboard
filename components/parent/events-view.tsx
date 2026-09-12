@@ -6,7 +6,7 @@ import { CalendarX2, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { useFeedStore, createServerPost, useVisibleEvents, type RsvpState } from "@/components/parent/feed-store"
+import { useFeedStore, createServerPost, useVisibleEvents, type RsvpFlags } from "@/components/parent/feed-store"
 import { useSocialStore } from "@/components/parent/social-store"
 import { PostComposer, type Draft, type EventDestination } from "@/components/parent/post-composer"
 import { EventCard } from "@/components/parent/event-card"
@@ -53,14 +53,14 @@ export function EventsView() {
   const allPosts = useMemo(() => [...serverPosts, ...posts], [serverPosts, posts])
   const serverIds = useMemo(() => new Set(serverPosts.map((post) => post.id)), [serverPosts])
 
-  // RSVP display prefers the server-persisted status for DB-backed events and
-  // falls back to the existing local RSVP map for seed/local events.
+  // RSVP display prefers the server-persisted flags for DB-backed events and
+  // falls back to the existing local RSVP map for seed/local events. Going and
+  // Interested are independent, so each event carries both flags.
   const rsvpView = useMemo(() => {
-    const merged: Record<string, RsvpState> = { ...rsvp }
+    const merged: Record<string, RsvpFlags> = { ...rsvp }
     for (const post of serverPosts) {
-      const status = post.myRsvp
-      if (post.type === "event" && (status === "going" || status === "interested")) {
-        merged[post.id] = status
+      if (post.type === "event" && (post.myGoing || post.myInterested)) {
+        merged[post.id] = { going: Boolean(post.myGoing), interested: Boolean(post.myInterested) }
       }
     }
     return merged
@@ -185,18 +185,21 @@ export function EventsView() {
     notify("Event deleted")
   }
 
-  function setInterest(event: EventView, state: RsvpState | null) {
+  function setInterest(event: EventView, flags: RsvpFlags) {
+    const prev = rsvpView[event.id] ?? { going: false, interested: false }
     if (serverIds.has(event.id)) {
-      // DB-backed event: one RSVP per user in public.event_rsvps. The optimistic
-      // setter updates the shared cache instantly (so the card and the details
-      // dialog move together), persists via the existing setRsvp action, then
-      // revalidates to authoritative counts. Clearing sends the "none" sentinel,
-      // which rsvpView treats as no RSVP and persists across refresh.
-      void setRsvpOptimistic(event.id, state ?? "none")
+      // DB-backed event: Going and Interested are independent flags in
+      // public.event_rsvps. The optimistic setter updates the shared cache
+      // instantly (so the card and the details dialog move together), persists
+      // via the setRsvp action, then revalidates to authoritative counts.
+      void setRsvpOptimistic(event.id, flags.going, flags.interested)
     } else {
-      setRsvp(event.id, state)
+      setRsvp(event.id, flags)
     }
-    notify(state === "going" ? "You're going" : state === "interested" ? "Marked as interested" : "RSVP cleared")
+    // Announce only the flag that actually changed so the toast stays accurate
+    // when a user holds both at once.
+    if (flags.going !== prev.going) notify(flags.going ? "You're going" : "No longer going")
+    else if (flags.interested !== prev.interested) notify(flags.interested ? "Marked as interested" : "No longer interested")
   }
 
   async function share(event: EventView) {
@@ -225,9 +228,10 @@ export function EventsView() {
           <EventCard
             key={event.id}
             event={event}
-            rsvp={rsvpView[event.id]}
+            going={Boolean(rsvpView[event.id]?.going)}
+            interested={Boolean(rsvpView[event.id]?.interested)}
             onOpen={() => setOpenId(event.id)}
-            onSetRsvp={(state) => setInterest(event, state)}
+            onSetRsvp={(flags) => setInterest(event, flags)}
             onShare={() => share(event)}
           />
         ))}
@@ -384,8 +388,9 @@ export function EventsView() {
         detail={activeDetail}
         open={openId !== null}
         onOpenChange={(next) => !next && setOpenId(null)}
-        rsvp={activeView ? rsvpView[activeView.id] : undefined}
-        onSetRsvp={(state) => activeView && setInterest(activeView, state)}
+        going={activeView ? Boolean(rsvpView[activeView.id]?.going) : false}
+        interested={activeView ? Boolean(rsvpView[activeView.id]?.interested) : false}
+        onSetRsvp={(flags) => activeView && setInterest(activeView, flags)}
         onShare={() => activeView && share(activeView)}
         onSaveEdit={(patch) => activeView && handleSaveEdit(activeView.id, patch)}
         onDelete={() => activeView && handleDelete(activeView.id)}

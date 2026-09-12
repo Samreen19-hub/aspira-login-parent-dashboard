@@ -10,7 +10,12 @@ const INITIAL_POSTS: FeedPost[] = [...FEED_POSTS, ...SPACE_FEED_POSTS, ...SEED_E
 /** Seeds re-added on hydration if a returning user's stored feed is missing them (scoped feeds + events). */
 const MERGE_SEEDS: FeedPost[] = [...SPACE_FEED_POSTS, ...SEED_EVENTS]
 
-export type RsvpState = "going" | "interested"
+/**
+ * Independent RSVP flags for one event. Going and Interested are NOT mutually
+ * exclusive — a user may hold both at once, and toggling one never affects the
+ * other.
+ */
+export type RsvpFlags = { going: boolean; interested: boolean }
 
 /** Builds a FeedPost from a composer draft. Shared by the Home Feed and group/community feeds. */
 export function draftToPost(
@@ -181,7 +186,8 @@ export function postViewToFeedPost(view: PostView): FeedPost {
     isMine: view.isMine,
     hiddenByMe: view.hiddenByMe,
     likedByMe: view.likedByMe,
-    myRsvp: view.myRsvp ?? undefined,
+    myGoing: view.myGoing,
+    myInterested: view.myInterested,
     serverBacked: true,
     eventGoingCount: view.rsvpGoingCount,
     eventInterestedCount: view.rsvpInterestedCount,
@@ -190,28 +196,24 @@ export function postViewToFeedPost(view: PostView): FeedPost {
   }
 }
 
-/** The one RSVP state a user can hold per event, plus the cleared sentinel. */
-export type RsvpStatus = "going" | "interested" | "none"
-
 /**
- * Applies a single-RSVP-per-user transition to a cached PostView list for an
- * instant, consistent optimistic update. Moving between states adjusts BOTH
- * aggregate counts (e.g. going -> interested decrements going, increments
- * interested); the sentinel "none" clears the viewer's RSVP. Counts never go
- * negative. The server revalidation that follows replaces these with the
- * authoritative values (and refreshes participant name lists).
+ * Applies an INDEPENDENT Going/Interested update to a cached PostView list for
+ * an instant optimistic render. Each flag's aggregate count moves only when
+ * that specific flag changes for the viewer, so toggling Going never touches
+ * the Interested total (and vice versa) — a user can be counted in both. Counts
+ * never go negative. The server revalidation that follows replaces these with
+ * the authoritative values (and refreshes participant name lists).
  */
-function applyOptimisticRsvp(list: PostView[], postId: string, status: RsvpStatus): PostView[] {
+function applyOptimisticRsvp(list: PostView[], postId: string, going: boolean, interested: boolean): PostView[] {
   return list.map((post) => {
     if (post.id !== postId) return post
-    const prev = post.myRsvp
-    let going = post.rsvpGoingCount
-    let interested = post.rsvpInterestedCount
-    if (prev === "going") going = Math.max(0, going - 1)
-    if (prev === "interested") interested = Math.max(0, interested - 1)
-    if (status === "going") going += 1
-    if (status === "interested") interested += 1
-    return { ...post, myRsvp: status === "none" ? null : status, rsvpGoingCount: going, rsvpInterestedCount: interested }
+    let goingCount = post.rsvpGoingCount
+    let interestedCount = post.rsvpInterestedCount
+    if (post.myGoing && !going) goingCount = Math.max(0, goingCount - 1)
+    if (!post.myGoing && going) goingCount += 1
+    if (post.myInterested && !interested) interestedCount = Math.max(0, interestedCount - 1)
+    if (!post.myInterested && interested) interestedCount += 1
+    return { ...post, myGoing: going, myInterested: interested, rsvpGoingCount: goingCount, rsvpInterestedCount: interestedCount }
   })
 }
 
@@ -228,14 +230,14 @@ function useDbFeed(key: unknown[], fetcher: () => Promise<PostView[]>) {
   const { data, mutate } = useSWR(key, fetcher, { revalidateOnFocus: false })
   const posts = useMemo(() => (data ?? []).map(postViewToFeedPost), [data])
   const setRsvpOptimistic = useCallback(
-    (postId: string, status: RsvpStatus) =>
+    (postId: string, going: boolean, interested: boolean) =>
       mutate(
         async () => {
-          await setRsvpAction(postId, status)
+          await setRsvpAction(postId, going, interested)
           return fetcher()
         },
         {
-          optimisticData: (current?: PostView[]) => applyOptimisticRsvp(current ?? [], postId, status),
+          optimisticData: (current?: PostView[]) => applyOptimisticRsvp(current ?? [], postId, going, interested),
           rollbackOnError: true,
           revalidate: false,
         },
@@ -270,13 +272,13 @@ export function useVisibleEvents(scopes: string[]) {
 type FeedStoreValue = {
   posts: FeedPost[]
   savedIds: string[]
-  rsvp: Record<string, RsvpState>
+  rsvp: Record<string, RsvpFlags>
   toggleSaved: (id: string) => void
   removePost: (id: string) => void
   removePostsByScope: (scope: string) => void
   addPost: (post: FeedPost) => void
   updatePost: (id: string, patch: Partial<FeedPost>) => void
-  setRsvp: (id: string, state: RsvpState | null) => void
+  setRsvp: (id: string, flags: RsvpFlags) => void
 }
 const FeedStoreContext = createContext<FeedStoreValue | null>(null)
 const POSTS_KEY = "aspira-parent-feed-posts"
@@ -287,7 +289,7 @@ const FOCUS_KEY = "aspira-parent-focus-post"
 export function FeedStoreProvider({ children }: { children: ReactNode }) {
   const [posts, setPosts] = useState<FeedPost[]>(INITIAL_POSTS)
   const [savedIds, setSavedIds] = useState<string[]>([])
-  const [rsvp, setRsvpState] = useState<Record<string, RsvpState>>(DEFAULT_RSVP)
+  const [rsvp, setRsvpState] = useState<Record<string, RsvpFlags>>(DEFAULT_RSVP)
   const [hydrated, setHydrated] = useState(false)
   useEffect(() => { try { const postsValue = localStorage.getItem(POSTS_KEY); const savedValue = localStorage.getItem(SAVED_KEY); const rsvpValue = localStorage.getItem(RSVP_KEY); if (postsValue) { const stored: FeedPost[] = JSON.parse(postsValue); const storedIds = new Set(stored.map((post) => post.id)); const missingSeeds = MERGE_SEEDS.filter((post) => !storedIds.has(post.id)); setPosts([...stored, ...missingSeeds]) } if (savedValue) setSavedIds(JSON.parse(savedValue)); if (rsvpValue) setRsvpState(JSON.parse(rsvpValue)) } catch {} finally { setHydrated(true) } }, [])
   useEffect(() => { if (!hydrated) return; localStorage.setItem(POSTS_KEY, JSON.stringify(posts)) }, [hydrated, posts])
@@ -302,7 +304,7 @@ export function FeedStoreProvider({ children }: { children: ReactNode }) {
     removePostsByScope: (scope: string) => { const removedIds = new Set(posts.filter((post) => post.scope === scope).map((post) => post.id)); setPosts((items) => items.filter((item) => item.scope !== scope)); setSavedIds((ids) => ids.filter((id) => !removedIds.has(id))) },
     addPost: (post: FeedPost) => setPosts((items) => [post, ...items]),
     updatePost: (id: string, patch: Partial<FeedPost>) => setPosts((items) => items.map((item) => item.id === id ? { ...item, ...patch, event: patch.event ? { ...item.event, ...patch.event } : item.event } : item)),
-    setRsvp: (id: string, state: RsvpState | null) => setRsvpState((current) => { const next = { ...current }; if (state) next[id] = state; else delete next[id]; return next }),
+    setRsvp: (id: string, flags: RsvpFlags) => setRsvpState((current) => { const next = { ...current }; if (flags.going || flags.interested) next[id] = flags; else delete next[id]; return next }),
   }), [posts, savedIds, rsvp])
   return <FeedStoreContext.Provider value={value}>{children}</FeedStoreContext.Provider>
 }

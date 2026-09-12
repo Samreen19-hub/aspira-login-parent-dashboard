@@ -27,8 +27,12 @@ export interface EventView {
   canManage: boolean
   attendees: number
   attendeeNames: string[]
-  /** The signed-in user's RSVP for this event ("going"/"interested"), if any. */
-  myRsvp?: "going" | "interested"
+  /**
+   * The signed-in user's INDEPENDENT RSVP flags. Going and Interested are not
+   * mutually exclusive, so both are carried separately — a user can be both.
+   */
+  myGoing: boolean
+  myInterested: boolean
   /** Number of users marked "going" (from the DB for server-backed events). */
   goingCount: number
   /** Number of users marked "interested" (from the DB for server-backed events). */
@@ -165,7 +169,8 @@ export function buildEventView(
 
   // RSVP aggregates. Server-backed events carry real per-user counts and
   // participant names from the DB; seed events approximate with space members.
-  const myRsvp = post.myRsvp === "going" || post.myRsvp === "interested" ? post.myRsvp : undefined
+  const myGoing = Boolean(post.myGoing)
+  const myInterested = Boolean(post.myInterested)
   const goingNames = post.eventGoingNames ?? []
   const interestedNames = post.eventInterestedNames ?? (space ? space.memberNames.slice(0, 4) : [])
   const goingCount = post.eventGoingCount ?? goingNames.length
@@ -194,7 +199,8 @@ export function buildEventView(
     canManage,
     attendees,
     attendeeNames,
-    myRsvp,
+    myGoing,
+    myInterested,
     goingCount,
     interestedCount,
     goingNames,
