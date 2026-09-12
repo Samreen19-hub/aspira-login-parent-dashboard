@@ -90,6 +90,17 @@ export interface FeedPost {
    * Saved Posts view to surface the "hidden from your feed" state and Unhide.
    */
   hiddenByMe?: boolean
+  /**
+   * The signed-in user's like state for a DB-backed post. Set from the server
+   * feed; undefined for seed/localStorage posts. Seeds the Like button so, after
+   * a refresh, the state is restored from the DB rather than reset to unliked.
+   */
+  likedByMe?: boolean
+  /**
+   * The signed-in user's RSVP status for a DB-backed event post ("going" /
+   * "interested"), read from the server. Undefined for seed/localStorage posts.
+   */
+  myRsvp?: string
 }
 
 export interface SocialSpace {

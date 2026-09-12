@@ -174,6 +174,8 @@ export function postViewToFeedPost(view: PostView): FeedPost {
     scope: view.scope ?? undefined,
     isMine: view.isMine,
     hiddenByMe: view.hiddenByMe,
+    likedByMe: view.likedByMe,
+    myRsvp: view.myRsvp ?? undefined,
   }
 }
 

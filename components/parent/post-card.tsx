@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import type { FeedPost } from "@/lib/parent-data"
 import { useFeedStore } from "@/components/parent/feed-store"
+import { toggleLike, addComment as addCommentAction, votePoll } from "@/app/actions/posts"
 
 function initialsOf(name: string) {
   return name
@@ -18,9 +19,10 @@ function initialsOf(name: string) {
     .join("")
 }
 
-export function PostCard({ post, onHide, onDelete, onOpen, savedView }: { post: FeedPost; onHide?: () => void; onDelete?: () => void; onOpen?: () => void; savedView?: boolean }) {
+export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBacked = false }: { post: FeedPost; onHide?: () => void; onDelete?: () => void; onOpen?: () => void; savedView?: boolean; serverBacked?: boolean }) {
   const { savedIds, toggleSaved } = useFeedStore()
-  const [liked, setLiked] = useState(false)
+  const [liked, setLiked] = useState(post.likedByMe ?? false)
+  const [likeCount, setLikeCount] = useState(post.likes)
   const saved = savedIds.includes(post.id)
   const [showComments, setShowComments] = useState(false)
   const [comment, setComment] = useState("")
@@ -31,7 +33,7 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView }: { post: 
   const [copied, setCopied] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [pollVotes, setPollVotes] = useState(post.poll?.votes ?? [])
-  const [voted, setVoted] = useState<number | null>(null)
+  const [voted, setVoted] = useState<number | null>(post.poll?.voted ?? null)
   const [feedback, setFeedback] = useState("")
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -42,11 +44,61 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView }: { post: 
     return () => document.removeEventListener("mousedown", close)
   }, [menuOpen])
 
-  const likeCount = post.likes + (liked ? 1 : 0)
+  // Like: optimistic toggle for instant feedback. DB-backed posts persist through
+  // toggleLike() (authenticated user, public.post_likes) and reconcile to the
+  // server count; seed/local posts keep the original local-only toggle.
+  async function handleLike() {
+    const next = !liked
+    setLiked(next)
+    setLikeCount((count) => count + (next ? 1 : -1))
+    if (!serverBacked) return
+    try {
+      const result = await toggleLike(post.id)
+      setLiked(result.liked)
+      setLikeCount(result.likeCount)
+    } catch {
+      setLiked(!next)
+      setLikeCount((count) => count + (next ? -1 : 1))
+    }
+  }
 
-  function addComment() {
-    if (!comment.trim() && !commentImage) return
-    setComments((prev) => [...prev, { id: `c-${Date.now()}`, author: "Rashi Kapoor", avatar: "/avatar-rashi.png", text: comment.trim(), image: commentImage, time: "now" }])
+  // Poll: optimistic tally shift, then persist through votePoll() (public.poll_votes)
+  // for DB-backed posts and reconcile to the server tally. Local posts stay local.
+  function handleVote(index: number) {
+    if (index === voted) return
+    const previous = voted
+    setPollVotes((votes) => votes.map((vote, i) => vote + (i === index ? 1 : i === previous ? -1 : 0)))
+    setVoted(index)
+    if (!serverBacked) return
+    votePoll(post.id, index)
+      .then((result) => {
+        const options = post.poll?.options ?? []
+        setPollVotes(options.map((_, i) => result.pollTally[i] ?? 0))
+        setVoted(result.myVote)
+      })
+      .catch(() => {
+        setVoted(previous)
+        setPollVotes((votes) => votes.map((vote, i) => vote + (i === index ? -1 : i === previous ? 1 : 0)))
+      })
+  }
+
+  // Comment: DB-backed posts persist through addComment() with the authenticated
+  // author resolved server-side (no hardcoded identity). Seed/local posts keep
+  // the original local-only behavior, including optional image attachments.
+  async function addComment() {
+    const body = comment.trim()
+    if (!body && !commentImage) return
+    if (serverBacked) {
+      if (!body) return
+      try {
+        const created = await addCommentAction(post.id, body)
+        setComments((prev) => [...prev, { id: created.id, author: created.author.name ?? "Parent", avatar: created.author.avatar ?? "/placeholder.svg", text: created.body, time: "now" }])
+        setComment(""); setCommentImage(undefined)
+        setShowComments(true)
+      } catch {}
+      return
+    }
+    setComments((prev) => [...prev, { id: `c-${Date.now()}`, author: "Rashi Kapoor", avatar: "/avatar-rashi.png", text: body, image: commentImage, time: "now" }])
     setComment(""); setCommentImage(undefined)
     setShowComments(true)
   }
@@ -94,7 +146,7 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView }: { post: 
       {post.type === "photo" && <div className="px-4 pb-3"><p className="whitespace-pre-line text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p><Hashtags tags={post.hashtags} /></div>}
       {post.type === "achievement" && post.achievement && <AchievementPost achievement={post.achievement} />}
       {post.type === "event" && post.event && <EventPost event={post.event} />}
-      {post.type === "poll" && post.poll && <PollCard poll={post.poll} pollVotes={pollVotes} voted={voted} onVote={(index) => { if (index === voted) return; setPollVotes((votes) => votes.map((vote, i) => vote + (i === index ? 1 : i === voted ? -1 : 0))); setVoted(index) }} />}
+      {post.type === "poll" && post.poll && <PollCard poll={post.poll} pollVotes={pollVotes} voted={voted} onVote={handleVote} />}
       {/* Image */}
       {post.image && (
         <div className="relative aspect-[16/9] w-full overflow-hidden bg-secondary">
@@ -107,7 +159,7 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView }: { post: 
         <div className="flex items-center justify-between border-b border-border py-3">
           <button
             type="button"
-            onClick={() => setLiked((v) => !v)}
+            onClick={handleLike}
             className="flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-brand"
           >
             <span
@@ -126,7 +178,7 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView }: { post: 
         </div>
 
         <div className="flex items-center justify-between py-1.5">
-          <ActionButton icon={Heart} label="Like" active={liked} onClick={() => setLiked((v) => !v)} />
+          <ActionButton icon={Heart} label="Like" active={liked} onClick={handleLike} />
           <ActionButton icon={MessageCircle} label="Comment" onClick={() => setShowComments((v) => !v)} />
           <ActionButton icon={Share2} label="Share" onClick={() => setShareOpen(true)} />
           <ActionButton

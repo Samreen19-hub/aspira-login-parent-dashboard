@@ -6,7 +6,8 @@ import { CalendarX2, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { useFeedStore, draftToPost, type RsvpState } from "@/components/parent/feed-store"
+import { useFeedStore, draftToPost, useServerFeed, type RsvpState } from "@/components/parent/feed-store"
+import { setRsvp as setRsvpAction } from "@/app/actions/posts"
 import { useSocialStore } from "@/components/parent/social-store"
 import { PostComposer, type Draft, type EventDestination } from "@/components/parent/post-composer"
 import { EventCard } from "@/components/parent/event-card"
@@ -41,6 +42,27 @@ function orderByTime(list: EventView[]) {
 export function EventsView() {
   const { posts, addPost, updatePost, removePost, rsvp, setRsvp } = useFeedStore()
   const social = useSocialStore()
+  // DB-backed posts (home scope) — the same server feed Home uses — so newly
+  // created event posts in public.posts (type='event') appear here too.
+  const { posts: serverPosts, mutate: mutateFeed } = useServerFeed(null)
+
+  // Server events surface alongside the existing seed/local posts. IDs never
+  // collide (server UUIDs vs. seed/`post-` ids), so a plain concat is safe.
+  const allPosts = useMemo(() => [...serverPosts, ...posts], [serverPosts, posts])
+  const serverIds = useMemo(() => new Set(serverPosts.map((post) => post.id)), [serverPosts])
+
+  // RSVP display prefers the server-persisted status for DB-backed events and
+  // falls back to the existing local RSVP map for seed/local events.
+  const rsvpView = useMemo(() => {
+    const merged: Record<string, RsvpState> = { ...rsvp }
+    for (const post of serverPosts) {
+      const status = post.myRsvp
+      if (post.type === "event" && (status === "going" || status === "interested")) {
+        merged[post.id] = status
+      }
+    }
+    return merged
+  }, [rsvp, serverPosts])
 
   const [filter, setFilter] = useState<FilterKey>("all")
   const [query, setQuery] = useState("")
@@ -65,10 +87,10 @@ export function EventsView() {
   // Every event post the current parent can access, resolved to a view model.
   const events = useMemo(() => {
     const now = new Date()
-    return posts
+    return allPosts
       .map((post) => toEventView(post, membership, now))
       .filter((view): view is EventView => view !== null)
-  }, [posts, membership])
+  }, [allPosts, membership])
 
   const needle = query.trim().toLowerCase()
   const matchesQuery = useMemo(() => {
@@ -96,8 +118,8 @@ export function EventsView() {
   // My events splits into what Rashi created vs. events she's attending / interested in.
   const mineCreated = useMemo(() => events.filter((e) => e.isMine && matchesQuery(e)), [events, matchesQuery])
   const mineAttending = useMemo(
-    () => events.filter((e) => !e.isMine && rsvp[e.id] && matchesQuery(e)),
-    [events, rsvp, matchesQuery],
+    () => events.filter((e) => !e.isMine && rsvpView[e.id] && matchesQuery(e)),
+    [events, rsvpView, matchesQuery],
   )
 
   // Where a new event can be shared: connections, any joined group, any followed community, or private.
@@ -116,7 +138,7 @@ export function EventsView() {
   }, [social.joined, social.following, social.getSpace])
 
   const activeView = openId ? events.find((e) => e.id === openId) ?? null : null
-  const activeDetail = openId ? posts.find((p) => p.id === openId)?.event : undefined
+  const activeDetail = openId ? allPosts.find((p) => p.id === openId)?.event : undefined
 
   function handleCreate(draft: Draft) {
     const destination = draft.event?.destination ?? "connections"
@@ -159,7 +181,15 @@ export function EventsView() {
   }
 
   function setInterest(event: EventView, state: RsvpState | null) {
-    setRsvp(event.id, state)
+    if (serverIds.has(event.id)) {
+      // DB-backed event: persist through the existing server action
+      // (public.event_rsvps, authenticated user). There is no delete action, so
+      // clearing stores a sentinel "none" status that rsvpView treats as no RSVP
+      // — this persists correctly across refresh and is visible to other users.
+      void setRsvpAction(event.id, state ?? "none").then(() => mutateFeed())
+    } else {
+      setRsvp(event.id, state)
+    }
     notify(state === "going" ? "You're going" : state === "interested" ? "Marked as interested" : "RSVP cleared")
   }
 
@@ -189,9 +219,9 @@ export function EventsView() {
           <EventCard
             key={event.id}
             event={event}
-            rsvp={rsvp[event.id]}
+            rsvp={rsvpView[event.id]}
             onOpen={() => setOpenId(event.id)}
-            onToggleInterested={() => setInterest(event, rsvp[event.id] ? null : "interested")}
+            onToggleInterested={() => setInterest(event, rsvpView[event.id] ? null : "interested")}
             onShare={() => share(event)}
           />
         ))}
@@ -348,7 +378,7 @@ export function EventsView() {
         detail={activeDetail}
         open={openId !== null}
         onOpenChange={(next) => !next && setOpenId(null)}
-        rsvp={activeView ? rsvp[activeView.id] : undefined}
+        rsvp={activeView ? rsvpView[activeView.id] : undefined}
         onSetRsvp={(state) => activeView && setInterest(activeView, state)}
         onShare={() => activeView && share(activeView)}
         onSaveEdit={(patch) => activeView && handleSaveEdit(activeView.id, patch)}
