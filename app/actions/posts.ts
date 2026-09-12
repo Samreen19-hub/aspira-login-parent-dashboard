@@ -180,6 +180,39 @@ export async function getFeed(
     .where(scope == null ? sql`${posts.scope} IS NULL` : eq(posts.scope, scope))
     .orderBy(desc(posts.createdAt))
 
+  return annotatePosts(postRows, meId)
+}
+
+/**
+ * Resolves a specific set of posts by id, newest first, regardless of scope.
+ * Used by the Saved Posts view to render DB-backed posts whose UUIDs were saved
+ * to the existing (localStorage) saved-id list. Read-only; introduces no new
+ * saved-post storage and does not change how posts are saved.
+ */
+export async function getPostsByIds(ids: string[]): Promise<PostView[]> {
+  const meId = await getUserId()
+  const unique = Array.from(new Set((ids ?? []).filter(Boolean)))
+  if (unique.length === 0) return []
+  await ensurePostsTables()
+
+  const postRows = await db
+    .select()
+    .from(posts)
+    .where(inArray(posts.id, unique))
+    .orderBy(desc(posts.createdAt))
+
+  return annotatePosts(postRows, meId)
+}
+
+/**
+ * Annotates raw post rows with aggregate counts and the signed-in user's own
+ * like / vote / rsvp state. Shared by `getFeed` and `getPostsByIds` so both
+ * return identically-shaped, fully-rendered posts.
+ */
+async function annotatePosts(
+  postRows: (typeof posts.$inferSelect)[],
+  meId: string,
+): Promise<PostView[]> {
   if (postRows.length === 0) return []
 
   const postIds = postRows.map((p) => p.id)
