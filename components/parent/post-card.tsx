@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import type { FeedPost } from "@/lib/parent-data"
+import { eventDisplayDate } from "@/lib/parent-data"
 import { useFeedStore, type RsvpFlags } from "@/components/parent/feed-store"
 import { EventRsvpBar } from "@/components/parent/event-rsvp-bar"
 import { toggleLike, addComment as addCommentAction, votePoll } from "@/app/actions/posts"
@@ -318,7 +319,7 @@ function EventPost({ event, rsvp, onShare }: { event: NonNullable<FeedPost["even
       <div className="min-w-0">
         <Badge className="border-0 bg-[#6f32d5] px-3 py-1 text-[11px] font-semibold text-white">Upcoming event</Badge>
         <h3 className="mt-3 break-words font-display text-2xl font-bold leading-tight text-[#25213d] sm:text-3xl">{event.title}</h3>
-        <div className="mt-3 grid gap-2 text-sm text-[#5d527f] sm:grid-cols-3 sm:gap-3"><EventDetail icon={CalendarDays} label={event.date} /><EventDetail icon={Clock3} label={event.time} /><EventDetail icon={MapPin} label={event.location} />{event.organizer && <EventDetail icon={Users} label={`Organized by ${event.organizer}`} />}</div>
+        <div className="mt-3 grid gap-2 text-sm text-[#5d527f] sm:grid-cols-3 sm:gap-3"><EventDetail icon={CalendarDays} label={eventDisplayDate(event)} /><EventDetail icon={Clock3} label={event.time} /><EventDetail icon={MapPin} label={event.location} />{event.organizer && <EventDetail icon={Users} label={`Organized by ${event.organizer}`} />}</div>
         <p className="mt-3 whitespace-pre-line break-words text-sm leading-6 text-[#302b4a]">{event.description}</p>
       </div>
       <CalendarIllustration />

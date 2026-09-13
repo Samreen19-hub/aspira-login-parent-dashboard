@@ -21,6 +21,8 @@ export interface EventView {
   /** e.g. "8:00 AM – 10:00 AM". */
   timeLabel: string
   start: Date
+  /** End of the event (End Date + End Time), falling back to the start day when no End Date is set. */
+  end: Date
   isPast: boolean
   isMine: boolean
   /** Whether the current parent may edit/delete this event. */
@@ -82,6 +84,22 @@ function resolveStart(post: FeedPost): Date {
   const minutes = parseTimeToMinutes(event.time)
   base.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0)
   return base
+}
+
+/** Builds the end Date from the event's End Date (falling back to its start ISO date) + End Time. */
+function resolveEnd(post: FeedPost): Date {
+  const event = post.event!
+  const iso = event.endDate ?? event.isoDate
+  const base = iso ? new Date(`${iso}T00:00:00`) : new Date(event.date)
+  if (Number.isNaN(base.getTime())) return resolveStart(post)
+  const minutes = parseTimeToMinutes(event.endTime || event.time)
+  base.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0)
+  return base
+}
+
+/** True when two dates fall on the same calendar day. */
+function isSameCalendarDay(a: Date, b: Date) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 }
 
 function normalizeTimeLabel(value?: string) {
@@ -155,7 +173,8 @@ export function buildEventView(
   const isMine = opts.isMine ?? (post.isMine ?? post.author === CURRENT_PARENT)
 
   const start = resolveStart(post)
-  const isPast = start.getTime() < now.getTime()
+  const end = resolveEnd(post)
+  const isPast = end.getTime() < now.getTime()
   const canManage = source !== "school" && (isMine || spaceEditable)
 
   // Organizer resolution. For a DB-backed (server) event the resolved post
@@ -202,9 +221,10 @@ export function buildEventView(
         : SOURCE_LABELS[source],
     spaceTitle: space?.title,
     spaceSlug: space?.slug,
-    dateLabel: formatDDMMYYYY(start),
+    dateLabel: isSameCalendarDay(start, end) ? formatDDMMYYYY(start) : `${formatDDMMYYYY(start)} – ${formatDDMMYYYY(end)}`,
     timeLabel: event.endTime ? `${normalizeTimeLabel(event.time)} – ${normalizeTimeLabel(event.endTime)}` : normalizeTimeLabel(event.time),
     start,
+    end,
     isPast,
     isMine,
     canManage,

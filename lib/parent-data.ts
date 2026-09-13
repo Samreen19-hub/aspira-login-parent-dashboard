@@ -48,6 +48,8 @@ export interface EventDetails {
   description: string
   /** Machine date (YYYY-MM-DD) used for sorting and upcoming/past classification. */
   isoDate?: string
+  /** Machine end date (YYYY-MM-DD). Falls back to isoDate when omitted (single-day event). */
+  endDate?: string
   /** End time display, e.g. "10:00 AM". */
   endTime?: string
   source?: EventSource
@@ -441,6 +443,7 @@ function makeEvent(config: {
   scope?: string
   title: string
   isoDate: string
+  endDate?: string
   time: string
   endTime: string
   location: string
@@ -468,6 +471,7 @@ function makeEvent(config: {
       title: config.title,
       date: displayDate(config.isoDate),
       isoDate: config.isoDate,
+      endDate: config.endDate,
       time: config.time,
       endTime: config.endTime,
       location: config.location,
@@ -483,6 +487,19 @@ function makeEvent(config: {
 /** Formats an ISO date (YYYY-MM-DD) into a short human display like "12 Sep 2026". */
 function displayDate(iso: string) {
   return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${iso}T12:00:00`))
+}
+
+/**
+ * Human display for an event's date on surfaces that render the payload directly
+ * (the Home Feed calendar card). Returns a single date for same-day events and a
+ * "start – end" range for multi-day events. Falls back to the stored display date
+ * for legacy events without an isoDate.
+ */
+export function eventDisplayDate(event: { date: string; isoDate?: string; endDate?: string }) {
+  if (!event.isoDate) return event.date
+  const start = displayDate(event.isoDate)
+  if (!event.endDate || event.endDate === event.isoDate) return start
+  return `${start} – ${displayDate(event.endDate)}`
 }
 
 const SCHOOL = 'Greenfield Public School'
