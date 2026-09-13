@@ -569,6 +569,59 @@ export async function deletePost(postId: string): Promise<{ deleted: true }> {
 }
 
 /**
+ * Edits an existing event post IN PLACE. Author-scoped: only the creator's own
+ * row matches, so this both authorizes and updates in one query. The event's
+ * identity is fully preserved — same post id, same `authorId` (organizer/creator),
+ * and every RSVP row in `public.event_rsvps` is left untouched (this never reads
+ * or writes RSVP state). The incoming `patch` is merged onto the existing
+ * `payload.event` JSONB, so unspecified fields keep their current values and no
+ * duplicate post is ever created. Returns the fully re-annotated view so callers
+ * can revalidate every surface with authoritative data.
+ */
+export async function updateEventPost(
+  postId: string,
+  patch: Record<string, unknown>,
+): Promise<PostView> {
+  const meId = await getUserId()
+  if (!postId) throw new Error('A valid event is required.')
+  await ensurePostsTables()
+
+  // Load the caller's OWN event post; a non-owner (or missing) row yields none.
+  const existing = await db
+    .select()
+    .from(posts)
+    .where(and(eq(posts.id, postId), eq(posts.authorId, meId)))
+    .limit(1)
+
+  if (existing.length === 0) {
+    throw new Error('You can only edit your own event.')
+  }
+  const row = existing[0]
+  if (row.type !== 'event') {
+    throw new Error('Only event posts can be edited here.')
+  }
+
+  // Merge the patch onto the existing event payload so unspecified event fields
+  // (and every non-event payload field) are preserved exactly as they were.
+  const currentPayload = (row.payload as Record<string, unknown>) ?? {}
+  const currentEvent = (currentPayload.event as Record<string, unknown>) ?? {}
+  const nextPayload = {
+    ...currentPayload,
+    event: { ...currentEvent, ...patch },
+  }
+
+  await db
+    .update(posts)
+    .set({ payload: nextPayload })
+    .where(and(eq(posts.id, postId), eq(posts.authorId, meId)))
+
+  // Return the same fully-annotated shape the feed uses (author, counts, and the
+  // viewer's own RSVP state), so the client can revalidate with authoritative data.
+  const [view] = await getPostsByIds([postId])
+  return view
+}
+
+/**
  * Hides a post from the signed-in user's OWN feed only. This never deletes or
  * modifies the post or any of its interactions — it inserts a viewer-scoped
  * `post_hides` marker, so the post stays fully visible to everyone else.
