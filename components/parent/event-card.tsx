@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { EventRsvpBar } from "@/components/parent/event-rsvp-bar"
 import type { EventView } from "@/lib/events"
 import type { EventSource } from "@/lib/parent-data"
-import type { RsvpState } from "@/components/parent/feed-store"
+import type { RsvpFlags } from "@/components/parent/feed-store"
 
 const SOURCE_TONE: Record<EventSource, string> = {
   school: "bg-violet-100 text-violet-700",
@@ -20,15 +20,17 @@ const SOURCE_TONE: Record<EventSource, string> = {
 
 export function EventCard({
   event,
-  rsvp,
+  going,
+  interested,
   onOpen,
   onSetRsvp,
   onShare,
 }: {
   event: EventView
-  rsvp?: RsvpState
+  going: boolean
+  interested: boolean
   onOpen: () => void
-  onSetRsvp: (state: RsvpState | null) => void
+  onSetRsvp: (flags: RsvpFlags) => void
   onShare: () => void
 }) {
   return (
@@ -68,7 +70,8 @@ export function EventCard({
           {!event.isPast && (
             <div className="mt-3">
               <EventRsvpBar
-                rsvp={rsvp}
+                going={going}
+                interested={interested}
                 goingCount={event.goingCount}
                 interestedCount={event.interestedCount}
                 onSetRsvp={onSetRsvp}

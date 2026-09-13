@@ -68,8 +68,13 @@ export type PostView = {
   pollTally: number[]
   /** The signed-in user's chosen option index, or null if they have not voted. */
   myVote: number | null
-  /** The signed-in user's RSVP status for an event post, or null. */
-  myRsvp: string | null
+  /**
+   * The signed-in user's INDEPENDENT RSVP flags for an event post. Going and
+   * Interested are two independent entities — a user may be both at once, so
+   * these two booleans are resolved separately (never one from the other).
+   */
+  myGoing: boolean
+  myInterested: boolean
   /** Total number of users marked "going" for an event post (all users). */
   rsvpGoingCount: number
   /** Total number of users marked "interested" for an event post (all users). */
@@ -182,7 +187,8 @@ export async function createPost(input: CreatePostInput): Promise<PostView> {
     hiddenByMe: false,
     pollTally: [],
     myVote: null,
-    myRsvp: null,
+    myGoing: false,
+    myInterested: false,
     rsvpGoingCount: 0,
     rsvpInterestedCount: 0,
     rsvpGoing: [],
@@ -404,14 +410,21 @@ async function annotatePosts(
   }
 
   // The signed-in user's RSVP for each event post (scoped to this user only).
+  // Going and Interested are INDEPENDENT: a single stored row encodes both via
+  // the combined 'going_interested' status, so we decode it into two separate
+  // sets — the user can be in one, the other, or both.
   const rsvpRows = await db
     .select({ postId: eventRsvps.postId, status: eventRsvps.status })
     .from(eventRsvps)
     .where(
       and(inArray(eventRsvps.postId, postIds), eq(eventRsvps.userId, meId)),
     )
-  const myRsvp = new Map<string, string>()
-  for (const rsvp of rsvpRows) myRsvp.set(rsvp.postId, rsvp.status)
+  const myGoing = new Set<string>()
+  const myInterested = new Set<string>()
+  for (const rsvp of rsvpRows) {
+    if (rsvp.status === 'going' || rsvp.status === 'going_interested') myGoing.add(rsvp.postId)
+    if (rsvp.status === 'interested' || rsvp.status === 'going_interested') myInterested.add(rsvp.postId)
+  }
 
   // Every user's RSVP for these posts, for the aggregate "going"/"interested"
   // counts and the participant lists shown on the event card and details dialog.
@@ -426,17 +439,21 @@ async function annotatePosts(
     .where(inArray(eventRsvps.postId, postIds))
   const goingIdsByPost = new Map<string, string[]>()
   const interestedIdsByPost = new Map<string, string[]>()
+  const pushInto = (map: Map<string, string[]>, postId: string, userId: string) => {
+    const list = map.get(postId) ?? []
+    list.push(userId)
+    map.set(postId, list)
+  }
   for (const rsvp of allRsvpRows) {
-    const bucket =
-      rsvp.status === 'going'
-        ? goingIdsByPost
-        : rsvp.status === 'interested'
-          ? interestedIdsByPost
-          : null
-    if (!bucket) continue
-    const list = bucket.get(rsvp.postId) ?? []
-    list.push(rsvp.userId)
-    bucket.set(rsvp.postId, list)
+    // A user counts toward Going and Interested INDEPENDENTLY; the combined
+    // 'going_interested' status places them in BOTH lists. Neither total is
+    // ever derived from the other. The sentinel 'none' is ignored.
+    if (rsvp.status === 'going' || rsvp.status === 'going_interested') {
+      pushInto(goingIdsByPost, rsvp.postId, rsvp.userId)
+    }
+    if (rsvp.status === 'interested' || rsvp.status === 'going_interested') {
+      pushInto(interestedIdsByPost, rsvp.postId, rsvp.userId)
+    }
   }
 
   // Which of these posts the signed-in user has hidden (viewer-scoped). The feed
@@ -502,7 +519,8 @@ async function annotatePosts(
       comments,
       pollTally: normalizeTally(pollTally.get(p.id) ?? []),
       myVote: myVote.has(p.id) ? myVote.get(p.id)! : null,
-      myRsvp: myRsvp.get(p.id) ?? null,
+      myGoing: myGoing.has(p.id),
+      myInterested: myInterested.has(p.id),
       rsvpGoingCount: (goingIdsByPost.get(p.id) ?? []).length,
       rsvpInterestedCount: (interestedIdsByPost.get(p.id) ?? []).length,
       rsvpGoing: toAuthorList(goingIdsByPost.get(p.id) ?? []),
@@ -697,20 +715,43 @@ export async function votePoll(
 }
 
 /**
- * Sets or updates the signed-in user's RSVP for an event post. One RSVP per
- * user per event is enforced by the unique `(post_id, user_id)` index, so this
- * upserts (also bumping `updated_at`). This is the server-backed successor to
- * the localStorage RSVP; nothing is migrated in this phase. Does NOT create a
- * notification here.
+ * Sets the signed-in user's RSVP for an event post. Going and Interested are
+ * two INDEPENDENT entities: this action takes the desired state of each flag
+ * and never derives one from the other. Because the unique `(post_id, user_id)`
+ * index allows only one row per user per event, both flags are persisted in
+ * that single row via a combined status:
+ *   - going only        -> 'going'
+ *   - interested only    -> 'interested'
+ *   - both at once       -> 'going_interested'
+ *   - neither            -> the row is deleted
+ * Setting one flag therefore never changes the other's total. This preserves
+ * the existing table/index (no schema change, no second RSVP store). Does NOT
+ * create a notification here.
  */
 export async function setRsvp(
   postId: string,
-  status: string,
-): Promise<{ status: string }> {
+  going: boolean,
+  interested: boolean,
+): Promise<{ going: boolean; interested: boolean }> {
   const userId = await getUserId()
   if (!postId) throw new Error('A valid post is required.')
-  if (!status) throw new Error('A valid RSVP status is required.')
   await ensurePostsTables()
+
+  const status = going && interested
+    ? 'going_interested'
+    : going
+      ? 'going'
+      : interested
+        ? 'interested'
+        : null
+
+  if (!status) {
+    // Both flags cleared -> remove the user's RSVP row entirely.
+    await db
+      .delete(eventRsvps)
+      .where(and(eq(eventRsvps.postId, postId), eq(eventRsvps.userId, userId)))
+    return { going: false, interested: false }
+  }
 
   await db
     .insert(eventRsvps)
@@ -720,7 +761,7 @@ export async function setRsvp(
       set: { status, updatedAt: new Date() },
     })
 
-  return { status }
+  return { going, interested }
 }
 
 /**

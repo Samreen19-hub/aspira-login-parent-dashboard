@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import type { EventView } from "@/lib/events"
 import type { EventDetails } from "@/lib/parent-data"
-import type { RsvpState } from "@/components/parent/feed-store"
+import type { RsvpFlags } from "@/components/parent/feed-store"
 
 function initialsOf(name: string) {
   return name.split(" ").map((n) => n[0]).slice(0, 2).join("")
@@ -50,7 +50,8 @@ export function EventDetailsDialog({
   detail,
   open,
   onOpenChange,
-  rsvp,
+  going,
+  interested,
   onSetRsvp,
   onShare,
   onDelete,
@@ -60,8 +61,9 @@ export function EventDetailsDialog({
   detail?: EventDetails
   open: boolean
   onOpenChange: (open: boolean) => void
-  rsvp?: RsvpState
-  onSetRsvp: (state: RsvpState | null) => void
+  going: boolean
+  interested: boolean
+  onSetRsvp: (flags: RsvpFlags) => void
   onShare: () => void
   onDelete: () => void
   onSaveEdit: (patch: Partial<EventDetails>) => void
@@ -119,9 +121,6 @@ export function EventDetailsDialog({
     })
     setEditing(false)
   }
-
-  const going = rsvp === "going"
-  const interested = rsvp === "interested"
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -203,10 +202,10 @@ export function EventDetailsDialog({
 
             {!view.isPast && (
               <div className="flex flex-wrap gap-2">
-                <Button variant={going ? "default" : "outline"} className="gap-1.5" onClick={() => onSetRsvp(going ? null : "going")} aria-pressed={going}>
+                <Button variant={going ? "default" : "outline"} className="gap-1.5" onClick={() => onSetRsvp({ going: !going, interested })} aria-pressed={going}>
                   <Check className="size-4" />Going
                 </Button>
-                <Button variant={interested ? "secondary" : "outline"} className="gap-1.5" onClick={() => onSetRsvp(interested ? null : "interested")} aria-pressed={interested}>
+                <Button variant={interested ? "secondary" : "outline"} className="gap-1.5" onClick={() => onSetRsvp({ going, interested: !interested })} aria-pressed={interested}>
                   <Star className={`size-4 ${interested ? "fill-current text-brand" : ""}`} />Interested
                 </Button>
                 <Button variant="outline" className="gap-1.5" onClick={onShare}>
