@@ -10,7 +10,7 @@ import { EventDetailsDialog } from "@/components/parent/event-details-dialog"
 import { PostHiddenNotice } from "@/components/parent/post-hidden-notice"
 import { buildEventView, type EventView } from "@/lib/events"
 import type { EventDetails, FeedPost } from "@/lib/parent-data"
-import { deletePost, hidePost, unhidePost } from "@/app/actions/posts"
+import { deletePost, hidePost, unhidePost, updateEventPost } from "@/app/actions/posts"
 
 export function HomeFeed({ childId }: { childId?: string }) {
   const { posts, removePost, updatePost, rsvp, setRsvp } = useFeedStore()
@@ -118,7 +118,22 @@ export function HomeFeed({ childId }: { childId?: string }) {
     interested={activeView ? Boolean(rsvpView[activeView.id]?.interested) : false}
     onSetRsvp={(flags) => activePost && setInterest(activePost, flags)}
     onShare={() => activeView && shareEvent(activeView)}
-    onSaveEdit={(patch) => activeView && updatePost(activeView.id, { event: patch as EventDetails })}
-    onDelete={() => { if (activePost) { removePost(activePost.id); setOpenEventId(null) } }}
+    onSaveEdit={async (patch) => {
+      if (!activePost) return
+      // DB-backed event: persist in place through the existing posts pipeline
+      // (same id/organizer, RSVP rows untouched), then revalidate the server
+      // feed so the Home Feed card and Events page both reflect the edit.
+      if (serverIds.has(activePost.id)) { await updateEventPost(activePost.id, patch as Record<string, unknown>); await mutate() }
+      else updatePost(activePost.id, { event: patch as EventDetails })
+    }}
+    onDelete={async () => {
+      if (!activePost) return
+      // DB-backed event: delete through the existing author-scoped action (which
+      // cascades its public.event_rsvps cleanup), then revalidate so it vanishes
+      // from the Home Feed and stays gone after refresh.
+      if (serverIds.has(activePost.id)) { await deletePost(activePost.id); await mutate() }
+      else removePost(activePost.id)
+      setOpenEventId(null)
+    }}
   /></div>
 }

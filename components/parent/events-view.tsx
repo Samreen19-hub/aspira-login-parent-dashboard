@@ -13,6 +13,7 @@ import { EventCard } from "@/components/parent/event-card"
 import { EventDetailsDialog } from "@/components/parent/event-details-dialog"
 import { toEventView, type EventView, type Membership } from "@/lib/events"
 import { CURRENT_PARENT, type EventDetails, type EventSource } from "@/lib/parent-data"
+import { deletePost, updateEventPost } from "@/app/actions/posts"
 import { cn } from "@/lib/utils"
 
 type FilterKey = "all" | "school" | "group" | "community" | "mine"
@@ -173,14 +174,31 @@ export function EventsView() {
     notify("Event created")
   }
 
-  function handleSaveEdit(id: string, patch: Partial<EventDetails>) {
-    // The feed store merges `event` patches onto the existing event details.
-    updatePost(id, { event: patch as EventDetails })
+  async function handleSaveEdit(id: string, patch: Partial<EventDetails>) {
+    if (serverIds.has(id)) {
+      // DB-backed event: persist the edit in place through the existing posts
+      // pipeline (same id, same organizer, RSVP rows untouched), then revalidate
+      // so the Events page AND Home Feed both show the updated data — never stale.
+      await updateEventPost(id, patch as Record<string, unknown>)
+      await mutateFeed()
+    } else {
+      // Seed/localStorage event: the feed store merges the patch onto the details.
+      updatePost(id, { event: patch as EventDetails })
+    }
     notify("Event updated")
   }
 
-  function handleDelete(id: string) {
-    removePost(id)
+  async function handleDelete(id: string) {
+    if (serverIds.has(id)) {
+      // DB-backed event: delete the row through the existing author-scoped action
+      // (which also cascades cleanup of its public.event_rsvps rows), then
+      // revalidate so it disappears from the Events page and Home Feed and stays
+      // gone after a refresh.
+      await deletePost(id)
+      await mutateFeed()
+    } else {
+      removePost(id)
+    }
     setOpenId(null)
     notify("Event deleted")
   }
