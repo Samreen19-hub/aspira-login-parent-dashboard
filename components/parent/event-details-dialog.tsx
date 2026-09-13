@@ -183,30 +183,27 @@ export function EventDetailsDialog({
               <Detail icon={CalendarDays} label={view.dateLabel} />
               <Detail icon={Clock3} label={view.timeLabel} />
               <Detail icon={MapPin} label={view.location} />
-              <Detail icon={Users} label={`${view.attendees} interested`} />
               <p className="whitespace-pre-line text-sm leading-6 text-muted-foreground text-pretty">{view.description}</p>
 
-              {view.attendeeNames.length > 0 && (
-                <div className="flex items-center gap-2">
-                  <div className="flex -space-x-2">
-                    {view.attendeeNames.map((name) => (
-                      <Avatar key={name} className="size-8 ring-2 ring-card">
-                        <AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(name)}</AvatarFallback>
-                      </Avatar>
-                    ))}
-                  </div>
-                  <span className="text-sm text-muted-foreground">and others</span>
-                </div>
-              )}
+              {/* Going and Interested are two INDEPENDENT entities: each list shows
+                  its own total and its own participants, resolved separately from
+                  the DB. The same person can appear in both, and neither total is
+                  ever derived from the other. */}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <ParticipantList icon={Check} label="Going" count={view.goingCount} names={view.goingNames} />
+                <ParticipantList icon={Star} label="Interested" count={view.interestedCount} names={view.interestedNames} />
+              </div>
             </div>
 
             {!view.isPast && (
               <div className="flex flex-wrap gap-2">
                 <Button variant={going ? "default" : "outline"} className="gap-1.5" onClick={() => onSetRsvp({ going: !going, interested })} aria-pressed={going}>
                   <Check className="size-4" />Going
+                  <span className="tabular-nums font-semibold">{view.goingCount}</span>
                 </Button>
                 <Button variant={interested ? "secondary" : "outline"} className="gap-1.5" onClick={() => onSetRsvp({ going, interested: !interested })} aria-pressed={interested}>
                   <Star className={`size-4 ${interested ? "fill-current text-brand" : ""}`} />Interested
+                  <span className="tabular-nums font-semibold">{view.interestedCount}</span>
                 </Button>
                 <Button variant="outline" className="gap-1.5" onClick={onShare}>
                   <Share2 className="size-4" />Share
@@ -236,6 +233,49 @@ function Detail({ icon: Icon, label }: { icon: React.ElementType; label: string 
     <div className="flex items-center gap-2 text-sm font-medium text-foreground">
       <Icon className="size-4 shrink-0 text-brand" aria-hidden="true" />
       <span>{label}</span>
+    </div>
+  )
+}
+
+/**
+ * One independent RSVP roster (Going OR Interested). Its `count` and `names`
+ * are passed in already resolved for that single entity, so this never mixes
+ * or derives one list from the other — the same person may appear in both the
+ * Going and Interested lists rendered side by side.
+ */
+function ParticipantList({
+  icon: Icon,
+  label,
+  count,
+  names,
+}: {
+  icon: React.ElementType
+  label: string
+  count: number
+  names: string[]
+}) {
+  return (
+    <div className="rounded-xl border border-border p-3">
+      <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+        <Icon className="size-4 shrink-0 text-brand" aria-hidden="true" />
+        <span>
+          {label}: <span className="tabular-nums">{count}</span>
+        </span>
+      </div>
+      {names.length > 0 ? (
+        <ul className="mt-2 flex flex-col gap-1.5">
+          {names.map((name) => (
+            <li key={name} className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Avatar className="size-6">
+                <AvatarFallback className="bg-brand-muted text-[10px] font-semibold text-brand">{initialsOf(name)}</AvatarFallback>
+              </Avatar>
+              <span className="truncate">{name}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-sm text-muted-foreground">No one yet</p>
+      )}
     </div>
   )
 }
