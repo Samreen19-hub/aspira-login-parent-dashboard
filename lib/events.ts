@@ -188,7 +188,18 @@ export function buildEventView(
     author: post.author,
     avatar: post.avatar,
     source,
-    sourceLabel: isMine && (source === "connections" || source === "private") ? "My Event" : SOURCE_LABELS[source],
+    // Ownership label is strictly id-based: "My Event" is shown ONLY when the
+    // viewer is the creator (isMine = authorId === current user id). The
+    // connections/private buckets default to "My Event" in SOURCE_LABELS, so a
+    // peer's connections/private event (isMine === false) must fall back to a
+    // neutral "Event" label instead — never "My Event". School/group/community
+    // labels are unaffected.
+    sourceLabel:
+      source === "connections" || source === "private"
+        ? isMine
+          ? "My Event"
+          : "Event"
+        : SOURCE_LABELS[source],
     spaceTitle: space?.title,
     spaceSlug: space?.slug,
     dateLabel: formatDDMMYYYY(start),
