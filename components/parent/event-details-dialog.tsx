@@ -69,7 +69,7 @@ export function EventDetailsDialog({
   onSaveEdit: (patch: Partial<EventDetails>) => void
 }) {
   const [editing, setEditing] = useState(false)
-  const [form, setForm] = useState({ title: "", date: "", time: "", endTime: "", location: "", description: "" })
+  const [form, setForm] = useState({ title: "", date: "", endDate: "", time: "", endTime: "", location: "", description: "" })
   const [error, setError] = useState("")
 
   useEffect(() => {
@@ -84,6 +84,7 @@ export function EventDetailsDialog({
       setForm({
         title: detail.title,
         date: detail.isoDate ?? "",
+        endDate: detail.endDate ?? detail.isoDate ?? "",
         time: displayTo24(detail.time),
         endTime: displayTo24(detail.endTime),
         location: detail.location,
@@ -106,13 +107,19 @@ export function EventDetailsDialog({
       setError("Please select a future date for the event.")
       return
     }
-    if (form.endTime <= form.time) {
+    const endDate = form.endDate || form.date
+    if (endDate < form.date) {
+      setError("End date can't be before the start date.")
+      return
+    }
+    if (endDate === form.date && form.endTime <= form.time) {
       setError("End time must be after the start time.")
       return
     }
     onSaveEdit({
       title: form.title.trim(),
       isoDate: form.date,
+      endDate,
       date: new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(new Date(`${form.date}T12:00:00`)),
       time: to12(form.time),
       endTime: to12(form.endTime),
@@ -136,9 +143,15 @@ export function EventDetailsDialog({
                 <Label>Event title</Label>
                 <Input value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} />
               </div>
-              <div className="grid gap-2">
-                <Label>Date</Label>
-                <Input type="date" min={minDate} value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-2">
+                  <Label>Start date</Label>
+                  <Input type="date" min={minDate} value={form.date} onChange={(e) => setForm((f) => { const value = e.target.value; return { ...f, date: value, endDate: !f.endDate || f.endDate < value ? value : f.endDate } })} />
+                </div>
+                <div className="grid gap-2">
+                  <Label>End date</Label>
+                  <Input type="date" min={form.date || minDate} value={form.endDate} onChange={(e) => setForm((f) => ({ ...f, endDate: e.target.value }))} />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="grid gap-2">
