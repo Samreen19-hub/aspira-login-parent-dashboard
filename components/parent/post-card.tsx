@@ -37,7 +37,7 @@ function initialsOf(name: string) {
     .join("")
 }
 
-export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBacked = false }: { post: FeedPost; onHide?: () => void; onDelete?: () => void; onOpen?: () => void; savedView?: boolean; serverBacked?: boolean }) {
+export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBacked = false, eventRsvp }: { post: FeedPost; onHide?: () => void; onDelete?: () => void; onOpen?: () => void; savedView?: boolean; serverBacked?: boolean; eventRsvp?: EventRsvpControls }) {
   const { savedIds, toggleSaved } = useFeedStore()
   const [liked, setLiked] = useState(post.likedByMe ?? false)
   const [likeCount, setLikeCount] = useState(post.likes)
