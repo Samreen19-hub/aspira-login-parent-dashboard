@@ -8,8 +8,26 @@ import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import type { FeedPost } from "@/lib/parent-data"
-import { useFeedStore } from "@/components/parent/feed-store"
+import { useFeedStore, type RsvpFlags } from "@/components/parent/feed-store"
+import { EventRsvpBar } from "@/components/parent/event-rsvp-bar"
 import { toggleLike, addComment as addCommentAction, votePoll } from "@/app/actions/posts"
+
+/**
+ * Live RSVP wiring passed to the Home Feed event card. Counts, flags and
+ * handlers come straight from the existing feed-store RSVP pipeline (server:
+ * public.event_rsvps via setRsvpOptimistic; seed/local: the feed-store map), so
+ * the Home Feed event actions share the exact same source of truth as the
+ * Events page. Going and Interested stay independent.
+ */
+export type EventRsvpControls = {
+  going: boolean
+  interested: boolean
+  goingCount: number
+  interestedCount: number
+  isPast: boolean
+  onSetRsvp: (flags: RsvpFlags) => void
+  onOpenDetails: () => void
+}
 
 function initialsOf(name: string) {
   return name
@@ -145,7 +163,7 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
       {post.type === "text" && <div className="px-4 pb-3"><p className="whitespace-pre-line text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p><Hashtags tags={post.hashtags} /></div>}
       {post.type === "photo" && <div className="px-4 pb-3"><p className="whitespace-pre-line text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p><Hashtags tags={post.hashtags} /></div>}
       {post.type === "achievement" && post.achievement && <AchievementPost achievement={post.achievement} />}
-      {post.type === "event" && post.event && <EventPost event={post.event} />}
+      {post.type === "event" && post.event && <EventPost event={post.event} rsvp={eventRsvp} onShare={() => setShareOpen(true)} />}
       {post.type === "poll" && post.poll && <PollCard poll={post.poll} pollVotes={pollVotes} voted={voted} onVote={handleVote} />}
       {/* Image */}
       {post.image && (
@@ -293,7 +311,7 @@ function AchievementPost({ achievement }: { achievement: NonNullable<FeedPost["a
   </section>
 }
 
-function EventPost({ event }: { event: NonNullable<FeedPost["event"]> }) {
+function EventPost({ event, rsvp, onShare }: { event: NonNullable<FeedPost["event"]>; rsvp?: EventRsvpControls; onShare: () => void }) {
   return <section aria-label={`Event: ${event.title}`} className="relative mx-4 mb-4 overflow-hidden rounded-2xl border border-[#d8c4ff] bg-[#fbf8ff] p-4 shadow-[0_10px_24px_-18px_rgba(111,50,213,0.65)] sm:p-5">
     <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-70 [background-image:radial-gradient(circle_at_8%_18%,rgba(232,188,82,0.7)_0_2px,transparent_3px),radial-gradient(circle_at_93%_15%,rgba(142,102,222,0.55)_0_2px,transparent_3px),radial-gradient(circle_at_46%_88%,rgba(242,164,191,0.45)_0_2px,transparent_3px)]" />
     <div className="relative grid items-center gap-5 md:grid-cols-[minmax(0,1.08fr)_minmax(220px,0.92fr)]">
@@ -305,6 +323,27 @@ function EventPost({ event }: { event: NonNullable<FeedPost["event"]> }) {
       </div>
       <CalendarIllustration />
     </div>
+    {rsvp && (
+      <div className="relative mt-4 flex flex-col gap-3 border-t border-[#e6d8ff] pt-4">
+        {!rsvp.isPast && (
+          <EventRsvpBar
+            going={rsvp.going}
+            interested={rsvp.interested}
+            goingCount={rsvp.goingCount}
+            interestedCount={rsvp.interestedCount}
+            onSetRsvp={rsvp.onSetRsvp}
+            size="sm"
+          />
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" className="rounded-lg" onClick={rsvp.onOpenDetails}>View details</Button>
+          <Button size="sm" variant="outline" className="gap-1.5 rounded-lg" onClick={onShare}>
+            <Share2 className="size-4" />
+            <span className="sr-only sm:not-sr-only">Share</span>
+          </Button>
+        </div>
+      </div>
+    )}
   </section>
 }
 

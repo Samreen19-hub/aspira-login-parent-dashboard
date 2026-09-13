@@ -1,17 +1,24 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useSearchParams } from "next/navigation"
 import { PostComposer, type Draft } from "@/components/parent/post-composer"
 import { PostCard } from "@/components/parent/post-card"
-import { useFeedStore, readPostFocus, clearPostFocus, createServerPost, useServerFeed } from "@/components/parent/feed-store"
+import { useFeedStore, readPostFocus, clearPostFocus, createServerPost, useServerFeed, type RsvpFlags } from "@/components/parent/feed-store"
+import { useSocialStore } from "@/components/parent/social-store"
+import { EventDetailsDialog } from "@/components/parent/event-details-dialog"
 import { PostHiddenNotice } from "@/components/parent/post-hidden-notice"
+import { buildEventView } from "@/lib/events"
+import type { EventDetails, FeedPost } from "@/lib/parent-data"
 import { deletePost, hidePost, unhidePost } from "@/app/actions/posts"
 
 export function HomeFeed({ childId }: { childId?: string }) {
-  const { posts, removePost } = useFeedStore()
-  const { posts: serverPosts, mutate } = useServerFeed(null)
+  const { posts, removePost, updatePost, rsvp, setRsvp } = useFeedStore()
+  const { posts: serverPosts, mutate, setRsvpOptimistic } = useServerFeed(null)
+  const social = useSocialStore()
   const [focusedId, setFocusedId] = useState<string | null>(null)
+  // Which Home Feed event has its details dialog open (reuses the Events page dialog).
+  const [openEventId, setOpenEventId] = useState<string | null>(null)
   // Id of the post just hidden via the DB-backed action, driving the temporary
   // "Post hidden" + Undo confirmation. Null when no confirmation is showing.
   const [hiddenNoticeId, setHiddenNoticeId] = useState<string | null>(null)
