@@ -335,6 +335,50 @@ export function ensurePostsTables(): Promise<void> {
 }
 
 /**
+ * Lazily provisions the `public.space_members` table (and its supporting
+ * indexes) using the shared pool, following the exact same idempotent
+ * (`IF NOT EXISTS`), memoized, schema-qualified pattern as the helpers above.
+ * This single, purely additive table backs Groups membership, Communities
+ * following, and admin ownership (`role`) for the social pages. It is unrelated
+ * to the group-chat `conversation_members` table. No foreign keys to
+ * `neon_auth`, matching the existing Aspira convention. The unique
+ * `(slug, user_id)` index makes join/follow idempotent; the `slug` index covers
+ * per-space roster and count lookups.
+ */
+let spaceMembersReady: Promise<void> | null = null
+export function ensureSpaceMembersTable(): Promise<void> {
+  if (!spaceMembersReady) {
+    spaceMembersReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.space_members (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          slug text NOT NULL,
+          user_id uuid NOT NULL,
+          role text NOT NULL DEFAULT 'member',
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      // One membership row per user per space -> join/follow is idempotent and
+      // a role change (member <-> admin) is a plain update.
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS space_members_unique
+        ON public.space_members (slug, user_id)
+      `)
+      // Covers roster and member-count lookups for a single space.
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS space_members_slug
+        ON public.space_members (slug)
+      `)
+    })().catch((error) => {
+      // Reset so a transient failure can be retried on the next call.
+      spaceMembersReady = null
+      throw error
+    })
+  }
+  return spaceMembersReady
+}
+
+/**
  * Lazily provisions the `public.post_hides` table (and its supporting indexes)
  * using the shared pool, following the exact same idempotent (`IF NOT EXISTS`),
  * memoized, schema-qualified pattern as the helpers above. This is a purely

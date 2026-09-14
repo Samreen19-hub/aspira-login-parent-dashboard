@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
+import useSWR from "swr"
+import { getSpaceCounts } from "@/app/actions/spaces"
 import { Bell, BookOpen, Check, Globe2, Heart, Layers3, MessageCircle, Search, Users, UserPlus } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -50,6 +52,8 @@ function SocialSection({ kind }: { kind: SocialKind }) {
   const [createOpen, setCreateOpen] = useState(false)
   const [mineOnly, setMineOnly] = useState(false)
   const { spaces, joined, toggleJoined, following, toggleFollowing } = useSocialStore()
+  // Member/follower counts come from the DB (public.space_members), never a static number.
+  const { data: counts } = useSWR("space-counts", getSpaceCounts, { revalidateOnFocus: false })
   const isGroups = kind === "groups"
   const Icon = isGroups ? Users : Globe2
   const sectionSpaces = useMemo(() => spaces.filter((space) => space.kind === kind), [spaces, kind])
@@ -74,17 +78,17 @@ function SocialSection({ kind }: { kind: SocialKind }) {
       </Card>
       <div className="flex flex-col gap-3 sm:flex-row"><div className="relative flex-1"><Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${kind}...`} className="h-11 rounded-xl pl-9" aria-label={`Search ${kind}`} /></div><div className="flex gap-2 overflow-x-auto pb-1">{filters.map((filter) => <Button key={filter} type="button" size="sm" variant={activeFilter === filter ? "default" : "outline"} className="shrink-0 rounded-xl" onClick={() => setActiveFilter(filter)}>{filter}</Button>)}</div></div>
       <div className="flex items-center justify-between"><p className="text-sm font-medium text-muted-foreground">{items.length} {isGroups ? "groups" : "communities"} {mineOnly ? "" : "to explore"}</p><Button type="button" variant={mineOnly ? "secondary" : "ghost"} size="sm" className="rounded-xl text-brand" aria-pressed={mineOnly} onClick={() => setMineOnly((value) => !value)}>{isGroups ? "My groups" : "Following"}</Button></div>
-      {items.length ? <div className="grid gap-4 md:grid-cols-2">{items.map((space) => <SocialCard key={space.slug} space={space} isJoined={joined.includes(space.slug)} isFollowing={following.includes(space.slug)} onToggle={() => (isGroups ? toggleJoined(space.slug) : toggleFollowing(space.slug))} />)}</div> : <Card className="border-dashed"><CardContent className="flex flex-col items-center gap-2 p-12 text-center"><Layers3 className="size-8 text-muted-foreground" /><p className="font-semibold">{mineOnly ? (isGroups ? "You haven't joined any groups yet" : "You're not following any communities yet") : "Nothing matches that search"}</p><p className="text-sm text-muted-foreground">{mineOnly ? (isGroups ? "Join a group to see it here." : "Follow a community to see it here.") : "Try another keyword or reset your filter."}</p><Button variant="outline" className="mt-2 rounded-xl" onClick={() => { setQuery(""); setActiveFilter("All"); setMineOnly(false) }}>{mineOnly ? "Browse all" : "Clear filters"}</Button></CardContent></Card>}
+      {items.length ? <div className="grid gap-4 md:grid-cols-2">{items.map((space) => <SocialCard key={space.slug} space={space} memberCount={counts?.[space.slug] ?? 0} isJoined={joined.includes(space.slug)} isFollowing={following.includes(space.slug)} onToggle={() => (isGroups ? toggleJoined(space.slug) : toggleFollowing(space.slug))} />)}</div> : <Card className="border-dashed"><CardContent className="flex flex-col items-center gap-2 p-12 text-center"><Layers3 className="size-8 text-muted-foreground" /><p className="font-semibold">{mineOnly ? (isGroups ? "You haven't joined any groups yet" : "You're not following any communities yet") : "Nothing matches that search"}</p><p className="text-sm text-muted-foreground">{mineOnly ? (isGroups ? "Join a group to see it here." : "Follow a community to see it here.") : "Try another keyword or reset your filter."}</p><Button variant="outline" className="mt-2 rounded-xl" onClick={() => { setQuery(""); setActiveFilter("All"); setMineOnly(false) }}>{mineOnly ? "Browse all" : "Clear filters"}</Button></CardContent></Card>}
     </div>
     <CreateSpaceDialog open={createOpen} onOpenChange={setCreateOpen} kind={kind} />
   </PageShell>
 }
 
-function SocialCard({ space, isJoined, isFollowing, onToggle }: { space: SocialSpace; isJoined: boolean; isFollowing: boolean; onToggle: () => void }) {
+function SocialCard({ space, memberCount, isJoined, isFollowing, onToggle }: { space: SocialSpace; memberCount: number; isJoined: boolean; isFollowing: boolean; onToggle: () => void }) {
   const isGroups = space.kind === "groups"
   const active = isGroups ? isJoined : isFollowing
   const detailHref = `/parent/${space.kind}/${space.slug}`
-  return <Card className="border-border/80 transition-shadow hover:shadow-md"><Link href={detailHref} className="block"><CardHeader className="flex flex-row items-start gap-3"><span className={`grid size-12 shrink-0 place-items-center rounded-2xl text-sm font-bold ${space.tone}`}>{space.initials}</span><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><CardTitle className="font-display text-lg leading-tight">{space.title}</CardTitle><Badge variant="secondary" className="shrink-0 bg-muted text-muted-foreground">{space.category}</Badge></div><CardDescription className="mt-1 flex items-center gap-1.5"><Users className="size-3.5" />{space.members} members</CardDescription></div></CardHeader></Link><CardContent><p className="text-sm leading-6 text-muted-foreground">{space.description}</p></CardContent><CardFooter className="flex items-center justify-between gap-3 border-t bg-muted/20 pt-4"><div className="flex items-center gap-3 text-xs text-muted-foreground"><span className="flex items-center gap-1"><MessageCircle className="size-3.5" />Active discussions</span><span className="flex items-center gap-1"><Bell className="size-3.5" />Updates</span></div><Button size="sm" variant={active ? "secondary" : "default"} className="rounded-xl" onClick={onToggle}>{active ? <><Check data-icon="inline-start" />{isGroups ? "Joined" : "Following"}</> : <><UserPlus data-icon="inline-start" />{isGroups ? "Join" : "Follow"}</>}</Button></CardFooter></Card>
+  return <Card className="border-border/80 transition-shadow hover:shadow-md"><Link href={detailHref} className="block"><CardHeader className="flex flex-row items-start gap-3"><span className={`grid size-12 shrink-0 place-items-center rounded-2xl text-sm font-bold ${space.tone}`}>{space.initials}</span><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><CardTitle className="font-display text-lg leading-tight">{space.title}</CardTitle><Badge variant="secondary" className="shrink-0 bg-muted text-muted-foreground">{space.category}</Badge></div><CardDescription className="mt-1 flex items-center gap-1.5"><Users className="size-3.5" />{memberCount} members</CardDescription></div></CardHeader></Link><CardContent><p className="text-sm leading-6 text-muted-foreground">{space.description}</p></CardContent><CardFooter className="flex items-center justify-between gap-3 border-t bg-muted/20 pt-4"><div className="flex items-center gap-3 text-xs text-muted-foreground"><span className="flex items-center gap-1"><MessageCircle className="size-3.5" />Active discussions</span><span className="flex items-center gap-1"><Bell className="size-3.5" />Updates</span></div><Button size="sm" variant={active ? "secondary" : "default"} className="rounded-xl" onClick={onToggle}>{active ? <><Check data-icon="inline-start" />{isGroups ? "Joined" : "Following"}</> : <><UserPlus data-icon="inline-start" />{isGroups ? "Join" : "Follow"}</>}</Button></CardFooter></Card>
 }
 
 function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpenChange: (open: boolean) => void; kind: SocialKind }) {
@@ -100,7 +104,7 @@ function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpen
 
   function reset() { setName(""); setDescription(""); setCategory(categories[0]); setPrivacy(isGroups ? "Private" : "Public"); setInvitees([]) }
   function toggleInvitee(id: string) { setInvitees((current) => (current.includes(id) ? current.filter((value) => value !== id) : [...current, id])) }
-  function create() {
+  async function create() {
     const trimmed = name.trim()
     if (!trimmed) return
     let slug = slugify(trimmed)
@@ -112,14 +116,17 @@ function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpen
       title: trimmed,
       description: description.trim() || `A ${isGroups ? "group" : "community"} for ${trimmed}.`,
       category,
-      // `members` counts everyone other than you (matches the seeded spaces); the detail page adds +1 while you are joined.
-      members: inviteeNames.length,
+      // Member/follower counts now come from the DB (public.space_members); this static field
+      // is unused for counts but kept to satisfy the shared SocialSpace shape.
+      members: 0,
       tone: "bg-violet-100 text-violet-700",
       initials: initialsOf(trimmed),
       privacy,
-      memberNames: ["Rashi Kapoor", ...inviteeNames],
+      memberNames: inviteeNames,
     }
-    addSpace(space)
+    // Records the creator as an ADMIN member in the DB (auto-join + auto-admin) before navigating,
+    // so the new space's detail page already recognizes the owner.
+    await addSpace(space)
     reset()
     onOpenChange(false)
     router.push(`/parent/${kind}/${slug}`)

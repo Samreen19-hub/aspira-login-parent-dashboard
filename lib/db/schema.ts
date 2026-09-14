@@ -236,6 +236,29 @@ export const eventRsvps = pgTable('event_rsvps', {
 })
 
 /**
+ * Groups/Communities membership & following (schema: public). ONE row = one user
+ * belonging to one space (identified by its static `slug`). This single table
+ * models group membership, community following, AND admin ownership via `role`
+ * (`member | admin`), so no separate follower or admin table is needed. It is
+ * ONLY for the Groups/Communities social pages — it is completely unrelated to
+ * the group-chat `conversation_members` table, which is left untouched.
+ *
+ * `user_id` is ALWAYS the authenticated session user at write time, never
+ * trusted from the browser. Following the existing Aspira convention this
+ * carries no foreign keys to `neon_auth.user`; it is provisioned lazily by
+ * `ensureSpaceMembersTable` (see `lib/db/index.ts`). Uniqueness of
+ * `(slug, user_id)` is enforced by the `space_members_unique` index so a
+ * join/follow is idempotent and role changes are a plain update.
+ */
+export const spaceMembers = pgTable('space_members', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  slug: text('slug').notNull(),
+  userId: uuid('user_id').notNull(),
+  role: text('role').notNull().default('member'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
  * Per-user hidden posts (schema: public). One row = one user hiding one post
  * from their OWN feed only. This never deletes or mutates the original post or
  * its interactions — it is a viewer-scoped filter, so a post hidden by one user
