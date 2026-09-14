@@ -1,10 +1,19 @@
 'use server'
 
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, inArray, ne, notInArray, sql } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { auth } from '@/lib/auth'
-import { db, ensureSpaceMembersTable } from '@/lib/db'
-import { profiles, spaceMembers, user } from '@/lib/db/schema'
+import {
+  db,
+  ensureSpaceInvitationsTable,
+  ensureSpaceMembersTable,
+} from '@/lib/db'
+import {
+  profiles,
+  spaceInvitations,
+  spaceMembers,
+  user,
+} from '@/lib/db/schema'
 
 /**
  * DB-backed Groups/Communities membership & following, on the existing Neon
@@ -378,4 +387,347 @@ export async function deleteSpace(slug: string): Promise<void> {
   await assertAdmin(slug, meId)
 
   await db.delete(spaceMembers).where(eq(spaceMembers.slug, slug))
+}
+
+// ---------------------------------------------------------------------------
+// Invite Members — REAL persisted invitations (public.space_invitations).
+//
+// An invitation is NOT membership. Sending one only records a `pending` row;
+// the invitee becomes a `space_members` member ONLY when they accept. All of
+// the security below is enforced entirely server-side against the authenticated
+// Better Auth session — the browser can never supply or spoof the actor id, the
+// inviter id, or bypass the membership/permission checks.
+// ---------------------------------------------------------------------------
+
+/** A real user who can still be invited to a space (dialog data source). */
+export type InviteableUser = {
+  userId: string
+  name: string
+  slug: string | null
+  avatar: string | null
+  headline: string | null
+}
+
+/** A real pending invitation for a space, projected with the invitee identity. */
+export type PendingInvitation = {
+  invitationId: string
+  userId: string
+  name: string
+  slug: string | null
+  avatar: string | null
+  headline: string | null
+  createdAt: string
+}
+
+/**
+ * Verifies the signed-in user may invite into `slug`: they must already belong
+ * to the space (member/follower/admin), mirroring the existing product rule
+ * where the Invite action is offered only to members with full access. This is
+ * the server-side guarantee — never rely on the UI hiding the button.
+ */
+async function assertCanInvite(slug: string, meId: string): Promise<void> {
+  const [mine] = await db
+    .select({ id: spaceMembers.id })
+    .from(spaceMembers)
+    .where(and(eq(spaceMembers.slug, slug), eq(spaceMembers.userId, meId)))
+    .limit(1)
+  if (!mine) {
+    throw new Error('Join this space before inviting others to it.')
+  }
+}
+
+/**
+ * Real users who can be invited to `slug`, sourced from `neon_auth.user` joined
+ * to `public.profiles` — never from a static/dummy contact list. Excludes the
+ * signed-in user, everyone already in `public.space_members`, and everyone who
+ * already has an active (`pending`) invitation to this space. Avatars fall back
+ * to the Better Auth image; the UI falls back to initials when both are null.
+ */
+export async function getInviteableSpaceUsers(
+  slug: string,
+): Promise<InviteableUser[]> {
+  const meId = await getUserId()
+  if (!slug) throw new Error('A valid space is required.')
+  await ensureSpaceMembersTable()
+  await ensureSpaceInvitationsTable()
+  await assertCanInvite(slug, meId)
+
+  const memberRows = await db
+    .select({ userId: spaceMembers.userId })
+    .from(spaceMembers)
+    .where(eq(spaceMembers.slug, slug))
+
+  const pendingRows = await db
+    .select({ inviteeId: spaceInvitations.inviteeId })
+    .from(spaceInvitations)
+    .where(
+      and(
+        eq(spaceInvitations.spaceSlug, slug),
+        eq(spaceInvitations.status, 'pending'),
+      ),
+    )
+
+  // Everyone already in the space or already invited is off the list, plus the
+  // signed-in user themselves.
+  const excluded = new Set<string>([meId])
+  for (const row of memberRows) excluded.add(row.userId)
+  for (const row of pendingRows) excluded.add(row.inviteeId)
+
+  const rows = await db
+    .select({
+      userId: user.id,
+      userName: user.name,
+      profileName: profiles.name,
+      profileSlug: profiles.slug,
+      avatar: profiles.avatar,
+      headline: profiles.headline,
+      image: user.image,
+    })
+    .from(user)
+    .leftJoin(profiles, eq(profiles.userId, user.id))
+    .where(ne(user.id, meId))
+    .orderBy(user.name)
+
+  return rows
+    .filter((r) => !excluded.has(r.userId))
+    .map((r) => ({
+      userId: r.userId,
+      name: r.profileName ?? r.userName ?? 'Aspira member',
+      slug: r.profileSlug ?? null,
+      avatar: r.avatar ?? r.image ?? null,
+      headline: r.headline ?? null,
+    }))
+}
+
+/**
+ * The active (`pending`) invitations for `slug`, projected with the invitee's
+ * identity, newest first. Restricted to members (via `assertCanInvite`) — the
+ * same audience that sees the roster. Drives the "Invited" state/badges,
+ * replacing the old dummy `INVITE_CONTACTS`-based local state.
+ */
+export async function getPendingSpaceInvitations(
+  slug: string,
+): Promise<PendingInvitation[]> {
+  const meId = await getUserId()
+  if (!slug) throw new Error('A valid space is required.')
+  await ensureSpaceMembersTable()
+  await ensureSpaceInvitationsTable()
+  await assertCanInvite(slug, meId)
+
+  const rows = await db
+    .select({
+      invitationId: spaceInvitations.id,
+      userId: spaceInvitations.inviteeId,
+      createdAt: spaceInvitations.createdAt,
+      profileName: profiles.name,
+      profileSlug: profiles.slug,
+      avatar: profiles.avatar,
+      headline: profiles.headline,
+      userName: user.name,
+      image: user.image,
+    })
+    .from(spaceInvitations)
+    .leftJoin(user, eq(user.id, spaceInvitations.inviteeId))
+    .leftJoin(profiles, eq(profiles.userId, spaceInvitations.inviteeId))
+    .where(
+      and(
+        eq(spaceInvitations.spaceSlug, slug),
+        eq(spaceInvitations.status, 'pending'),
+      ),
+    )
+    .orderBy(spaceInvitations.createdAt)
+
+  return rows.map((r) => ({
+    invitationId: r.invitationId,
+    userId: r.userId,
+    name: r.profileName ?? r.userName ?? 'Aspira member',
+    slug: r.profileSlug ?? null,
+    avatar: r.avatar ?? r.image ?? null,
+    headline: r.headline ?? null,
+    createdAt: r.createdAt.toISOString(),
+  }))
+}
+
+/**
+ * Sends real invitations from the signed-in user to `userIds` for `slug`,
+ * creating one `pending` row per invitee in `public.space_invitations`. Returns
+ * the number of invitations actually created.
+ *
+ * Server-side integrity, none of which the browser can bypass:
+ *   - the inviter is ALWAYS the session user (`assertCanInvite` also proves they
+ *     belong to the space);
+ *   - you can never invite yourself;
+ *   - only ids that are REAL users (`neon_auth.user`) are accepted;
+ *   - anyone already a member is skipped (membership already exists);
+ *   - the partial unique index makes a duplicate `pending` invitation impossible
+ *     even under a race — `onConflictDoNothing` absorbs it — so a re-invite of an
+ *     already-invited user is a silent no-op rather than a duplicate row.
+ * No `space_members` row is ever created here: sending is not joining.
+ */
+export async function inviteToSpace(
+  slug: string,
+  userIds: string[],
+): Promise<{ invited: number }> {
+  const meId = await getUserId()
+  if (!slug) throw new Error('A valid space is required.')
+  const requested = Array.from(new Set((userIds ?? []).filter(Boolean)))
+  if (requested.length === 0) return { invited: 0 }
+
+  await ensureSpaceMembersTable()
+  await ensureSpaceInvitationsTable()
+  await assertCanInvite(slug, meId)
+
+  // Keep only ids that are REAL users and are not the inviter themselves.
+  const realUsers = await db
+    .select({ id: user.id })
+    .from(user)
+    .where(and(inArray(user.id, requested), ne(user.id, meId)))
+  const realIds = new Set(realUsers.map((r) => r.id))
+
+  // Drop anyone who is already a member — they don't need an invitation.
+  const existingMembers = await db
+    .select({ userId: spaceMembers.userId })
+    .from(spaceMembers)
+    .where(
+      and(eq(spaceMembers.slug, slug), inArray(spaceMembers.userId, requested)),
+    )
+  for (const row of existingMembers) realIds.delete(row.userId)
+
+  const toInvite = [...realIds]
+  if (toInvite.length === 0) return { invited: 0 }
+
+  const inserted = await db
+    .insert(spaceInvitations)
+    .values(
+      toInvite.map((inviteeId) => ({
+        spaceSlug: slug,
+        inviterId: meId,
+        inviteeId,
+        status: 'pending',
+      })),
+    )
+    // The partial unique index only covers `pending`, so a concurrent duplicate
+    // pending invite is safely ignored rather than erroring.
+    .onConflictDoNothing()
+    .returning({ id: spaceInvitations.id })
+
+  return { invited: inserted.length }
+}
+
+/**
+ * Loads an invitation and verifies the signed-in user is its `invitee`, that it
+ * is still `pending`, and returns it. Shared guard for accept/decline so neither
+ * can act on someone else's invitation or on an already-resolved one.
+ */
+async function loadOwnedPendingInvitation(invitationId: string, meId: string) {
+  const [row] = await db
+    .select({
+      id: spaceInvitations.id,
+      spaceSlug: spaceInvitations.spaceSlug,
+      inviteeId: spaceInvitations.inviteeId,
+      inviterId: spaceInvitations.inviterId,
+      status: spaceInvitations.status,
+    })
+    .from(spaceInvitations)
+    .where(eq(spaceInvitations.id, invitationId))
+    .limit(1)
+
+  if (!row) throw new Error('That invitation no longer exists.')
+  if (row.inviteeId !== meId) {
+    throw new Error('This invitation was not addressed to you.')
+  }
+  if (row.status !== 'pending') {
+    throw new Error('This invitation has already been responded to.')
+  }
+  return row
+}
+
+/**
+ * Accepts an invitation. Only the invitation's own `invitee` may accept, and
+ * only while it is still `pending`. On success the user is added to
+ * `public.space_members` as a `member` (idempotent via the unique index) and the
+ * invitation is marked `accepted` with `responded_at = now()`. Membership is
+ * created HERE — never merely by an invitation having been sent.
+ */
+export async function acceptSpaceInvitation(
+  invitationId: string,
+): Promise<void> {
+  const meId = await getUserId()
+  if (!invitationId) throw new Error('A valid invitation is required.')
+  await ensureSpaceMembersTable()
+  await ensureSpaceInvitationsTable()
+
+  const invitation = await loadOwnedPendingInvitation(invitationId, meId)
+
+  await db
+    .insert(spaceMembers)
+    .values({ slug: invitation.spaceSlug, userId: meId, role: 'member' })
+    .onConflictDoNothing()
+
+  await db
+    .update(spaceInvitations)
+    .set({ status: 'accepted', respondedAt: new Date() })
+    .where(eq(spaceInvitations.id, invitationId))
+}
+
+/**
+ * Declines an invitation. Only the invitation's own `invitee` may decline, and
+ * only while it is still `pending`. NO `space_members` row is created — the
+ * invitation is simply marked `declined` with `responded_at = now()`.
+ */
+export async function declineSpaceInvitation(
+  invitationId: string,
+): Promise<void> {
+  const meId = await getUserId()
+  if (!invitationId) throw new Error('A valid invitation is required.')
+  await ensureSpaceInvitationsTable()
+
+  await loadOwnedPendingInvitation(invitationId, meId)
+
+  await db
+    .update(spaceInvitations)
+    .set({ status: 'declined', respondedAt: new Date() })
+    .where(eq(spaceInvitations.id, invitationId))
+}
+
+/**
+ * Cancels a still-`pending` invitation the signed-in user SENT (or that an admin
+ * of the space manages). Marks it `cancelled` with `responded_at = now()` so it
+ * frees the partial-unique slot and the invitee can be invited again later. No
+ * membership is affected.
+ */
+export async function cancelSpaceInvitation(
+  invitationId: string,
+): Promise<void> {
+  const meId = await getUserId()
+  if (!invitationId) throw new Error('A valid invitation is required.')
+  await ensureSpaceMembersTable()
+  await ensureSpaceInvitationsTable()
+
+  const [row] = await db
+    .select({
+      id: spaceInvitations.id,
+      spaceSlug: spaceInvitations.spaceSlug,
+      inviterId: spaceInvitations.inviterId,
+      status: spaceInvitations.status,
+    })
+    .from(spaceInvitations)
+    .where(eq(spaceInvitations.id, invitationId))
+    .limit(1)
+
+  if (!row) throw new Error('That invitation no longer exists.')
+  if (row.status !== 'pending') {
+    throw new Error('This invitation has already been responded to.')
+  }
+
+  // The inviter may cancel their own invitation; otherwise the caller must be an
+  // admin of the space. Either path is verified server-side.
+  if (row.inviterId !== meId) {
+    await assertAdmin(row.spaceSlug, meId)
+  }
+
+  await db
+    .update(spaceInvitations)
+    .set({ status: 'cancelled', respondedAt: new Date() })
+    .where(eq(spaceInvitations.id, invitationId))
 }

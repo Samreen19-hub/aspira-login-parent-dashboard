@@ -259,6 +259,33 @@ export const spaceMembers = pgTable('space_members', {
 })
 
 /**
+ * Real pending invitations to a Groups/Communities space (schema: public). ONE
+ * row = one user (`inviter_id`) invited another user (`invitee_id`) into a space
+ * (`space_slug`). This sits ALONGSIDE `public.space_members` and never replaces
+ * it: an invitation is NOT membership — a `space_members` row is created only if
+ * and when the recipient accepts. It is completely unrelated to the group-chat
+ * invitation flow (`conversations`/`conversation_members`), which is untouched.
+ *
+ * `inviter_id` is ALWAYS the authenticated session user at write time, never
+ * trusted from the browser. `status` is `pending | accepted | declined |
+ * cancelled`; `responded_at` is set when the recipient accepts/declines (or the
+ * inviter cancels). Following the existing Aspira convention this carries no
+ * foreign keys to `neon_auth.user`; it is provisioned lazily by
+ * `ensureSpaceInvitationsTable` (see `lib/db/index.ts`). The partial unique
+ * index `space_invitations_pending_unique` allows only one `pending` row per
+ * `(space_slug, invitee_id)`, so duplicate active invitations are impossible.
+ */
+export const spaceInvitations = pgTable('space_invitations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  spaceSlug: text('space_slug').notNull(),
+  inviterId: uuid('inviter_id').notNull(),
+  inviteeId: uuid('invitee_id').notNull(),
+  status: text('status').notNull().default('pending'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  respondedAt: timestamp('responded_at', { withTimezone: true }),
+})
+
+/**
  * Per-user hidden posts (schema: public). One row = one user hiding one post
  * from their OWN feed only. This never deletes or mutates the original post or
  * its interactions — it is a viewer-scoped filter, so a post hidden by one user
