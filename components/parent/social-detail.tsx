@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import useSWR from "swr"
 import { ArrowLeft, Bell, BellOff, Check, Copy, Lock, LogOut, MoreHorizontal, Search, Settings, ShieldCheck, Trash2, UserMinus, UserPlus, Users } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -16,18 +17,23 @@ import { useFeedStore, createServerPost, useServerFeed, readPostFocus, clearPost
 import { PostHiddenNotice } from "@/components/parent/post-hidden-notice"
 import { deletePost, hidePost, unhidePost } from "@/app/actions/posts"
 import { useSocialStore } from "@/components/parent/social-store"
-import { CURRENT_PARENT, INVITE_CONTACTS, otherMemberNames } from "@/lib/parent-data"
+import { getMe, getSpace as fetchSpaceState, getSpaceMembers, leaveSpace as leaveSpaceAction, makeAdmin as makeAdminAction, removeMember as removeMemberAction, type SpaceMember } from "@/app/actions/spaces"
+import { INVITE_CONTACTS } from "@/lib/parent-data"
 
 function initialsOf(name: string) {
-  return name
-    .split(" ")
-    .map((word) => word[0])
-    .slice(0, 2)
-    .join("")
+  return (
+    name
+      .split(" ")
+      .map((word) => word[0])
+      .filter(Boolean)
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "GC"
+  )
 }
 
 export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; slug: string }) {
-  const { getSpace, joined, toggleJoined, following, toggleFollowing, isAdmin, getAdmins, makeAdmin, leaveSpace, removeSpace, removeMember, getRemovedMembers, hydrated } = useSocialStore()
+  const { getSpace, joined, toggleJoined, following, toggleFollowing, isAdmin, removeSpace, hydrated, refresh } = useSocialStore()
   const { posts, removePost, removePostsByScope } = useFeedStore()
   const { posts: serverPosts, mutate: mutateFeed } = useServerFeed(slug)
   const router = useRouter()
@@ -39,9 +45,9 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [leaveOpen, setLeaveOpen] = useState(false)
   // Member the admin is about to remove (drives the confirmation dialog). Null when idle.
-  const [removeTarget, setRemoveTarget] = useState<string | null>(null)
+  const [removeTarget, setRemoveTarget] = useState<SpaceMember | null>(null)
   // Member/follower the admin is about to promote to admin. Null when idle.
-  const [makeAdminTarget, setMakeAdminTarget] = useState<string | null>(null)
+  const [makeAdminTarget, setMakeAdminTarget] = useState<SpaceMember | null>(null)
   const [copied, setCopied] = useState(false)
   const [focusedId, setFocusedId] = useState<string | null>(null)
   // Id of the post just hidden via the DB-backed action, driving the temporary
@@ -50,6 +56,22 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const menuRef = useRef<HTMLDivElement>(null)
 
   const record = getSpace(slug)
+  const validSpace = !!record && record.kind === kind
+
+  // The signed-in user's real identity (replaces the old hardcoded CURRENT_PARENT).
+  const { data: me } = useSWR("me", getMe, { revalidateOnFocus: false })
+  // Live counts + the viewer's own membership/admin flags for this space (any viewer).
+  const { data: spaceState, mutate: mutateState } = useSWR(validSpace ? ["space-state", slug] : null, () => fetchSpaceState(slug), { revalidateOnFocus: false })
+
+  const isJoined = joined.includes(slug)
+  const isFollowing = following.includes(slug)
+  const isGroup = kind === "groups"
+  const isMember = isGroup ? isJoined : isFollowing
+  const admin = isAdmin(slug)
+  const hasFullAccess = admin || isMember
+
+  // The real roster — loaded only for viewers with full access (members/followers/admins).
+  const { data: memberRows, mutate: mutateMembers } = useSWR(validSpace && hasFullAccess ? ["space-members", slug] : null, () => getSpaceMembers(slug), { revalidateOnFocus: false })
 
   useEffect(() => {
     const id = readPostFocus()
@@ -72,7 +94,12 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
 
   const backLabel = kind === "groups" ? "Back to Groups" : "Back to Communities"
 
-  if (!record || record.kind !== kind) {
+  // Refresh both the store memberships and this space's DB-backed views.
+  async function revalidateMembership() {
+    await Promise.all([refresh(), mutateState(), mutateMembers()])
+  }
+
+  if (!validSpace || !record) {
     return (
       <div className="mx-auto max-w-5xl">
         <Link href={`/parent/${kind}`} className="inline-flex w-fit items-center gap-2 text-sm font-medium text-brand hover:underline"><ArrowLeft className="size-4" />{backLabel}</Link>
@@ -85,14 +112,6 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
     )
   }
 
-  const isJoined = joined.includes(slug)
-  const isFollowing = following.includes(slug)
-  const isGroup = kind === "groups"
-  const isMember = isGroup ? isJoined : isFollowing
-  // Owner/admin always has full access regardless of Public/Private, and is not required to
-  // manually join/follow (the store already assigns membership on creation).
-  const admin = isAdmin(slug)
-  const hasFullAccess = admin || isMember
   const isPublic = record.privacy === "Public"
   // Public spaces let anyone read the feed and basic info; private spaces reveal nothing until
   // the parent joins/follows. Full access (member/follower/admin) always sees everything.
@@ -100,7 +119,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
 
   // Wait for the persisted membership state before rendering anything private, so member-only
   // content (feed, composer, members, invites) never flashes before the access check applies.
-  if (!hydrated) {
+  if (!hydrated || spaceState === undefined) {
     return (
       <div className="mx-auto max-w-5xl">
         <Link href={`/parent/${kind}`} className="inline-flex w-fit items-center gap-2 text-sm font-medium text-brand hover:underline"><ArrowLeft className="size-4" />{backLabel}</Link>
@@ -108,6 +127,14 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
         <span className="sr-only">Loading {isGroup ? "group" : "community"}…</span>
       </div>
     )
+  }
+
+  const memberCount = spaceState?.memberCount ?? 0
+
+  // Join/follow the current space (used by the header, the private gate, and the composer gate).
+  async function joinCurrent() {
+    if (isGroup) await toggleJoined(slug); else await toggleFollowing(slug)
+    await revalidateMembership()
   }
 
   // Access control for PRIVATE spaces: someone who has not joined/followed only sees the public
@@ -128,7 +155,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
                 </div>
                 <h1 className="mt-2 font-display text-2xl font-bold text-balance">{record.title}</h1>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground text-pretty">{record.description}</p>
-                <p className="mt-2 flex items-center gap-1.5 text-sm font-medium text-muted-foreground"><Users className="size-4" />{record.members} members</p>
+                <p className="mt-2 flex items-center gap-1.5 text-sm font-medium text-muted-foreground"><Users className="size-4" />{memberCount} members</p>
               </div>
             </div>
           </div>
@@ -138,7 +165,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
             <span className="grid size-14 place-items-center rounded-2xl bg-brand-muted text-brand"><Lock className="size-7" /></span>
             <h2 className="font-display text-lg font-semibold">{isGroup ? "This group is members only" : "This community is for followers"}</h2>
             <p className="max-w-sm text-sm leading-6 text-muted-foreground">{isGroup ? "Join this group to see group updates and connect with members." : "Follow this community to see community updates and connect with members."}</p>
-            <Button className="mt-1 rounded-xl" onClick={() => (isGroup ? toggleJoined(slug) : toggleFollowing(slug))}>{isGroup ? <><UserPlus data-icon="inline-start" />Join group</> : <><UserPlus data-icon="inline-start" />Follow</>}</Button>
+            <Button className="mt-1 rounded-xl" onClick={joinCurrent}>{isGroup ? <><UserPlus data-icon="inline-start" />Join group</> : <><UserPlus data-icon="inline-start" />Follow</>}</Button>
           </CardContent>
         </Card>
       </div>
@@ -146,12 +173,10 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   }
 
   const invitedContacts = INVITE_CONTACTS.filter((contact) => invited.includes(contact.id))
-  // Members/followers the admin has removed. Excluded from the roster and subtracted from the count.
-  const removedForSpace = getRemovedMembers(slug)
-  const otherMembers = otherMemberNames(record).filter((name) => !removedForSpace.includes(name))
-  const memberCount = record.members + (isMember ? 1 : 0) + invitedContacts.length - removedForSpace.length
-  // Single source of truth: the current parent appears in the roster only while actually a member.
-  const rosterNames = isMember ? [CURRENT_PARENT, ...otherMembers] : otherMembers
+  const members: SpaceMember[] = memberRows ?? []
+  const myUserId = me?.id ?? spaceState?.myUserId ?? null
+  // Everyone in the space other than the signed-in user.
+  const otherMembers = members.filter((member) => member.userId !== myUserId)
   // DB-backed posts for this space (newest) above the existing seed/localStorage posts. IDs are
   // distinct UUIDs, so there is never a duplicate with a seed or an older local post.
   const serverIds = new Set(serverPosts.map((post) => post.id))
@@ -160,19 +185,17 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   // --- Admin leave rules --------------------------------------------------
   // Admins besides the current parent. If any remain, the parent may leave freely because at
   // least one admin still owns the space.
-  const admins = getAdmins(slug)
-  const otherAdmins = admins.filter((name) => name !== CURRENT_PARENT)
-  // Other members/followers who could inherit ownership (roster excluding the parent, anyone
-  // already an admin, and anyone the admin has removed).
-  const transferCandidates = otherMembers.filter((name) => !admins.includes(name))
+  const otherAdmins = otherMembers.filter((member) => member.role === "admin")
+  // Other members/followers who could inherit ownership (roster excluding the parent and anyone
+  // already an admin).
+  const transferCandidates = otherMembers.filter((member) => member.role !== "admin")
   const isSoleAdmin = admin && otherAdmins.length === 0
   // Sole admin with other members/followers must hand off ownership before leaving. Sole admin
   // with nobody else cannot leave the space ownerless and is offered deletion instead.
   const mustTransferBeforeLeaving = isSoleAdmin && transferCandidates.length > 0
-  const soleAdminNoOthers = isSoleAdmin && transferCandidates.length === 0
 
   async function handlePost(draft: Draft) {
-    await createServerPost(draft, { author: CURRENT_PARENT, subtitle: `Parent of Aarav Kapoor · ${record!.title}`, avatar: "/avatar-rashi.png", scope: slug })
+    await createServerPost(draft, { author: me?.name ?? "Aspira member", subtitle: me?.headline ?? `Member · ${record!.title}`, avatar: me?.avatar ?? "/placeholder-user.jpg", scope: slug })
     await mutateFeed()
   }
 
@@ -181,41 +204,43 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
     setCopied(true); setMenuOpen(false); window.setTimeout(() => setCopied(false), 1800)
   }
 
-  // Admin-only. Removes the space and its scoped posts, then returns to the listing so the user
-  // is never left on a broken detail route.
-  function handleDelete() {
+  // Admin-only. Removes the space (every membership row, server-side) and its scoped posts, then
+  // returns to the listing so the user is never left on a broken detail route.
+  async function handleDelete() {
     removePostsByScope(slug)
-    removeSpace(slug)
     setDeleteOpen(false)
+    await removeSpace(slug)
     router.push(`/parent/${kind}`)
   }
 
   // Non-admins, and admins with a co-admin, leave directly. Admins who are the sole admin go
   // through the dialog (transfer ownership, or delete when nobody else is present).
-  function handleLeaveClick() {
+  async function handleLeaveClick() {
     if (admin && isSoleAdmin) { setLeaveOpen(true); setMenuOpen(false); return }
-    leaveSpace(slug)
     setMenuOpen(false)
+    await leaveSpaceAction(slug)
+    await revalidateMembership()
     router.push(`/parent/${kind}`)
   }
 
   // Sole admin picks a member/follower to inherit ownership; they become admin and the current
   // parent leaves immediately as a normal member/follower.
-  function handleTransferAndLeave(newAdmin: string) {
-    leaveSpace(slug, newAdmin)
+  async function handleTransferAndLeave(newAdminUserId: string) {
+    await leaveSpaceAction(slug, newAdminUserId)
+    await revalidateMembership()
     setLeaveOpen(false)
     router.push(`/parent/${kind}`)
   }
 
   // Admin-only. Confirms removing the pending member/follower from the space.
-  function handleConfirmRemove() {
-    if (removeTarget) removeMember(slug, removeTarget)
+  async function handleConfirmRemove() {
+    if (removeTarget) { await removeMemberAction(slug, removeTarget.userId); await revalidateMembership() }
     setRemoveTarget(null)
   }
 
   // Admin-only. Confirms promoting the pending member/follower to admin. Existing admins remain.
-  function handleConfirmMakeAdmin() {
-    if (makeAdminTarget) makeAdmin(slug, makeAdminTarget)
+  async function handleConfirmMakeAdmin() {
+    if (makeAdminTarget) { await makeAdminAction(slug, makeAdminTarget.userId); await revalidateMembership() }
     setMakeAdminTarget(null)
   }
 
@@ -244,9 +269,9 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
             </div>
             <div className="relative flex shrink-0 flex-wrap items-center gap-2">
               {isGroup ? (
-                <Button variant={isJoined ? "secondary" : "default"} className="rounded-xl" onClick={() => toggleJoined(slug)}>{isJoined ? <><Check data-icon="inline-start" />Joined</> : "Join group"}</Button>
+                <Button variant={isJoined ? "secondary" : "default"} className="rounded-xl" onClick={() => (isJoined ? handleLeaveClick() : joinCurrent())}>{isJoined ? <><Check data-icon="inline-start" />Joined</> : "Join group"}</Button>
               ) : (
-                <Button variant={isFollowing ? "secondary" : "default"} className="rounded-xl" onClick={() => toggleFollowing(slug)}>{isFollowing ? <><Check data-icon="inline-start" />Following</> : "Follow"}</Button>
+                <Button variant={isFollowing ? "secondary" : "default"} className="rounded-xl" onClick={() => (isFollowing ? handleLeaveClick() : joinCurrent())}>{isFollowing ? <><Check data-icon="inline-start" />Following</> : "Follow"}</Button>
               )}
               <Button variant="outline" size="icon" className="rounded-xl" aria-label="Space options" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>
                 <Settings className="size-4" />
@@ -263,7 +288,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
                       <button type="button" className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-secondary" onClick={() => { setDeleteOpen(true); setMenuOpen(false) }}><Trash2 className="size-4" />{isGroup ? "Delete group" : "Delete community"}</button>
                     </>
                   ) : (
-                    <button type="button" className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-secondary" onClick={() => { if (isGroup) { if (isJoined) toggleJoined(slug) } else if (isFollowing) toggleFollowing(slug); setMenuOpen(false) }}><LogOut className="size-4" />{isGroup ? (isJoined ? "Leave group" : "Not a member") : isFollowing ? "Unfollow" : "Not following"}</button>
+                    <button type="button" disabled={!isMember} className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-secondary disabled:opacity-60 disabled:hover:bg-transparent" onClick={handleLeaveClick}><LogOut className="size-4" />{isGroup ? (isJoined ? "Leave group" : "Not a member") : isFollowing ? "Unfollow" : "Not following"}</button>
                   )}
                 </div>
               )}
@@ -284,7 +309,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
               <CardContent className="flex flex-col items-center gap-3 p-6 text-center sm:flex-row sm:text-left">
                 <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-brand-muted text-brand"><Lock className="size-5" /></span>
                 <p className="flex-1 text-sm leading-6 text-muted-foreground">{isGroup ? "Join this group to participate and post updates." : "Follow this community to participate and post updates."}</p>
-                <Button className="rounded-xl" onClick={() => (isGroup ? toggleJoined(slug) : toggleFollowing(slug))}><UserPlus data-icon="inline-start" />{isGroup ? "Join group" : "Follow"}</Button>
+                <Button className="rounded-xl" onClick={joinCurrent}><UserPlus data-icon="inline-start" />{isGroup ? "Join group" : "Follow"}</Button>
               </CardContent>
             </Card>
           )}
@@ -315,14 +340,15 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
               <Badge variant="secondary" className="bg-brand-muted text-brand">{memberCount}</Badge>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
-              {rosterNames.slice(0, 5).map((name) => {
+              {members.slice(0, 5).map((member) => {
                 // Admin identification is visible to every member/follower, not just admins.
-                const isRowAdmin = admins.includes(name)
+                const isRowAdmin = member.role === "admin"
+                const isSelf = member.userId === myUserId
                 return (
-                  <div key={name} className="flex items-center justify-between gap-3">
+                  <div key={member.userId} className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      <Avatar className="size-9"><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(name)}</AvatarFallback></Avatar>
-                      <span className="text-sm font-medium">{name}</span>
+                      <Avatar className="size-9"><AvatarImage src={member.avatar ?? undefined} alt={member.name} /><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(member.name)}</AvatarFallback></Avatar>
+                      <span className="text-sm font-medium">{member.name}</span>
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
                       {isRowAdmin ? (
@@ -330,7 +356,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
                       ) : (
                         <span className="text-xs text-muted-foreground">Member</span>
                       )}
-                      {name === CURRENT_PARENT && <Badge variant="secondary">You</Badge>}
+                      {isSelf && <Badge variant="secondary">You</Badge>}
                     </div>
                   </div>
                 )
@@ -366,10 +392,10 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
       </div>
 
       <InviteMembersDialog open={inviteOpen} onOpenChange={setInviteOpen} spaceTitle={record.title} invited={invited} onInvite={(ids) => setInvited((current) => Array.from(new Set([...current, ...ids])))} />
-      <ViewAllMembersDialog open={membersOpen} onOpenChange={setMembersOpen} spaceTitle={record.title} memberNames={rosterNames} invitedContacts={invitedContacts.map((contact) => contact.name)} admins={admins} canManage={admin} onRequestRemove={(name) => setRemoveTarget(name)} onRequestMakeAdmin={(name) => setMakeAdminTarget(name)} />
+      <ViewAllMembersDialog open={membersOpen} onOpenChange={setMembersOpen} spaceTitle={record.title} members={members} invitedContacts={invitedContacts.map((contact) => contact.name)} myUserId={myUserId} canManage={admin} onRequestRemove={(member) => setRemoveTarget(member)} onRequestMakeAdmin={(member) => setMakeAdminTarget(member)} />
       {admin && <DeleteSpaceDialog open={deleteOpen} onOpenChange={setDeleteOpen} isGroup={isGroup} memberCount={memberCount} onConfirm={handleDelete} />}
-      {admin && <RemoveMemberDialog open={removeTarget !== null} onOpenChange={(value) => { if (!value) setRemoveTarget(null) }} isGroup={isGroup} memberName={removeTarget ?? ""} onConfirm={handleConfirmRemove} />}
-      {admin && <MakeAdminDialog open={makeAdminTarget !== null} onOpenChange={(value) => { if (!value) setMakeAdminTarget(null) }} isGroup={isGroup} memberName={makeAdminTarget ?? ""} onConfirm={handleConfirmMakeAdmin} />}
+      {admin && <RemoveMemberDialog open={removeTarget !== null} onOpenChange={(value) => { if (!value) setRemoveTarget(null) }} isGroup={isGroup} memberName={removeTarget?.name ?? ""} onConfirm={handleConfirmRemove} />}
+      {admin && <MakeAdminDialog open={makeAdminTarget !== null} onOpenChange={(value) => { if (!value) setMakeAdminTarget(null) }} isGroup={isGroup} memberName={makeAdminTarget?.name ?? ""} onConfirm={handleConfirmMakeAdmin} />}
       {admin && (
         <LeaveSpaceDialog
           open={leaveOpen}
@@ -453,7 +479,7 @@ function MakeAdminDialog({ open, onOpenChange, isGroup, memberName, onConfirm }:
 // Shown only to a sole admin who wants to leave. If eligible members/followers exist, the admin
 // must transfer ownership to one of them and then leaves immediately as a normal member/follower.
 // If nobody else remains, leaving would orphan the space, so deletion is offered instead.
-function LeaveSpaceDialog({ open, onOpenChange, isGroup, mustTransfer, candidates, onTransferAndLeave, onDeleteInstead }: { open: boolean; onOpenChange: (open: boolean) => void; isGroup: boolean; mustTransfer: boolean; candidates: string[]; onTransferAndLeave: (newAdmin: string) => void; onDeleteInstead: () => void }) {
+function LeaveSpaceDialog({ open, onOpenChange, isGroup, mustTransfer, candidates, onTransferAndLeave, onDeleteInstead }: { open: boolean; onOpenChange: (open: boolean) => void; isGroup: boolean; mustTransfer: boolean; candidates: SpaceMember[]; onTransferAndLeave: (newAdminUserId: string) => void; onDeleteInstead: () => void }) {
   const [selected, setSelected] = useState<string | null>(null)
   useEffect(() => { if (!open) setSelected(null) }, [open])
   const leaveWord = isGroup ? "leave this group" : "unfollow this community"
@@ -461,7 +487,7 @@ function LeaveSpaceDialog({ open, onOpenChange, isGroup, mustTransfer, candidate
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{mustTransfer ? "Transfer admin & leave" : isGroup ? "You’re the only admin" : "You’re the only admin"}</DialogTitle>
+          <DialogTitle>{mustTransfer ? "Transfer admin & leave" : "You’re the only admin"}</DialogTitle>
           <DialogDescription>
             {mustTransfer
               ? `You’re the only admin of this ${isGroup ? "group" : "community"}. Choose a ${isGroup ? "member" : "follower"} to become the new admin. They’ll take over ownership and you’ll ${leaveWord} right away.`
@@ -470,13 +496,13 @@ function LeaveSpaceDialog({ open, onOpenChange, isGroup, mustTransfer, candidate
         </DialogHeader>
         {mustTransfer ? (
           <ul className="max-h-72 space-y-1 overflow-y-auto">
-            {candidates.map((name) => {
-              const isSelected = selected === name
+            {candidates.map((member) => {
+              const isSelected = selected === member.userId
               return (
-                <li key={name}>
-                  <button type="button" onClick={() => setSelected(name)} className={`flex w-full items-center gap-3 rounded-xl border p-2 text-left transition-colors ${isSelected ? "border-brand bg-brand-muted" : "border-transparent hover:bg-secondary"}`}>
-                    <Avatar className="size-10"><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(name)}</AvatarFallback></Avatar>
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{name}</span>
+                <li key={member.userId}>
+                  <button type="button" onClick={() => setSelected(member.userId)} className={`flex w-full items-center gap-3 rounded-xl border p-2 text-left transition-colors ${isSelected ? "border-brand bg-brand-muted" : "border-transparent hover:bg-secondary"}`}>
+                    <Avatar className="size-10"><AvatarImage src={member.avatar ?? undefined} alt={member.name} /><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(member.name)}</AvatarFallback></Avatar>
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{member.name}</span>
                     <span className={`grid size-5 place-items-center rounded-full border ${isSelected ? "border-brand bg-brand text-brand-foreground" : "border-input"}`}>{isSelected && <Check className="size-3.5" />}</span>
                   </button>
                 </li>
@@ -536,9 +562,9 @@ function InviteMembersDialog({ open, onOpenChange, spaceTitle, invited, onInvite
 }
 
 // Admin identification (the Admin badge) is shown to everyone. When `canManage` is set (admin),
-// each eligible member/follower also gets "Make Admin" and Remove actions. The current parent
-// (always first, badged "You") can never be removed here — self-exit uses Leave/Unfollow.
-function ViewAllMembersDialog({ open, onOpenChange, spaceTitle, memberNames, invitedContacts, admins, canManage, onRequestRemove, onRequestMakeAdmin }: { open: boolean; onOpenChange: (open: boolean) => void; spaceTitle: string; memberNames: string[]; invitedContacts: string[]; admins: string[]; canManage?: boolean; onRequestRemove?: (name: string) => void; onRequestMakeAdmin?: (name: string) => void }) {
+// each eligible member/follower also gets "Make Admin" and Remove actions. The signed-in user
+// (badged "You") can never be removed here — self-exit uses Leave/Unfollow.
+function ViewAllMembersDialog({ open, onOpenChange, spaceTitle, members, invitedContacts, myUserId, canManage, onRequestRemove, onRequestMakeAdmin }: { open: boolean; onOpenChange: (open: boolean) => void; spaceTitle: string; members: SpaceMember[]; invitedContacts: string[]; myUserId: string | null; canManage?: boolean; onRequestRemove?: (member: SpaceMember) => void; onRequestMakeAdmin?: (member: SpaceMember) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -547,24 +573,24 @@ function ViewAllMembersDialog({ open, onOpenChange, spaceTitle, memberNames, inv
           <DialogDescription>{canManage ? "Manage who has access to this space." : "Everyone in this space."}</DialogDescription>
         </DialogHeader>
         <ul className="max-h-80 space-y-1 overflow-y-auto">
-          {memberNames.map((name, index) => {
-            const isSelf = name === CURRENT_PARENT
-            const isRowAdmin = admins.includes(name)
+          {members.map((member) => {
+            const isSelf = member.userId === myUserId
+            const isRowAdmin = member.role === "admin"
             return (
-              <li key={name} className="flex items-center justify-between gap-3 rounded-xl p-2">
+              <li key={member.userId} className="flex items-center justify-between gap-3 rounded-xl p-2">
                 <div className="flex min-w-0 items-center gap-3">
-                  <Avatar className="size-9"><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(name)}</AvatarFallback></Avatar>
-                  <span className="truncate text-sm font-medium">{name}</span>
+                  <Avatar className="size-9"><AvatarImage src={member.avatar ?? undefined} alt={member.name} /><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(member.name)}</AvatarFallback></Avatar>
+                  <span className="truncate text-sm font-medium">{member.name}</span>
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
                   {/* Admin role is always identified. */}
                   {isRowAdmin && <Badge variant="secondary" className="gap-1 bg-brand text-brand-foreground"><ShieldCheck className="size-3" />Admin</Badge>}
-                  {index === 0 && isSelf && <Badge variant="secondary">You</Badge>}
+                  {isSelf && <Badge variant="secondary">You</Badge>}
                   {/* Admin-only controls. Only offered for other members who are not yet admins. */}
                   {canManage && !isSelf && !isRowAdmin && (
                     <>
-                      <Button variant="outline" size="sm" className="h-8 rounded-lg" onClick={() => onRequestMakeAdmin?.(name)}><ShieldCheck data-icon="inline-start" />Make Admin</Button>
-                      <Button variant="ghost" size="sm" className="h-8 rounded-lg text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => onRequestRemove?.(name)}><UserMinus data-icon="inline-start" />Remove</Button>
+                      <Button variant="outline" size="sm" className="h-8 rounded-lg" onClick={() => onRequestMakeAdmin?.(member)}><ShieldCheck data-icon="inline-start" />Make Admin</Button>
+                      <Button variant="ghost" size="sm" className="h-8 rounded-lg text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => onRequestRemove?.(member)}><UserMinus data-icon="inline-start" />Remove</Button>
                     </>
                   )}
                 </div>
