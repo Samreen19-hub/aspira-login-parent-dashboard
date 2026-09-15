@@ -301,8 +301,8 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
       </Card>
 
       {/* Feed + members */}
-      <div className="grid items-start gap-5 lg:grid-cols-[1fr_320px]">
-        <div className="flex flex-col gap-5">
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="flex min-w-0 flex-col gap-5">
           {hasFullAccess ? (
             <PostComposer onPost={handlePost} />
           ) : (
