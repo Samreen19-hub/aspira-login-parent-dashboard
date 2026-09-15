@@ -23,15 +23,7 @@ import {
   spaceMembers,
   user,
 } from '@/lib/db/schema'
-
-/**
- * Maximum length of a single comment, in JavaScript characters. Enforced on BOTH
- * the client (input `maxLength` + submit guard) and the server (`addComment`),
- * so an oversized comment is rejected with a clean, user-readable error long
- * before it could reach the Next.js Server Action body-size limit. This is a
- * character cap, deliberately NOT a byte/1 MB limit.
- */
-export const MAX_COMMENT_LENGTH = 2000
+import { MAX_COMMENT_LENGTH } from '@/lib/validation'
 
 /**
  * DB-backed User Posts, phase one. Every post type (achievement, photo, event,

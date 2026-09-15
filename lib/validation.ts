@@ -1,3 +1,16 @@
+/**
+ * Maximum length of a single comment, in JavaScript characters. Enforced on BOTH
+ * the client (input `maxLength` + submit guard) and the server (`addComment`),
+ * so an oversized comment is rejected with a clean, user-readable error long
+ * before it could reach the Next.js Server Action body-size limit. This is a
+ * character cap, deliberately NOT a byte/1 MB limit.
+ *
+ * Lives in this plain (non-`"use server"`) module so it can be imported by both
+ * client components and server actions — a `"use server"` file may only export
+ * async server actions, never a plain constant.
+ */
+export const MAX_COMMENT_LENGTH = 2000
+
 export function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
 }
