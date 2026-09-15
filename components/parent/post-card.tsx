@@ -208,8 +208,8 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
 
       {feedback && <button type="button" onClick={() => setFeedback("")} className="mx-4 mt-2 rounded-lg bg-brand-muted px-3 py-2 text-left text-sm text-brand">{feedback}</button>}
 
-      {post.type === "text" && <div className="px-4 pb-3"><p className="whitespace-pre-line text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p><Hashtags tags={post.hashtags} /></div>}
-      {post.type === "photo" && <div className="px-4 pb-3"><p className="whitespace-pre-line text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p><Hashtags tags={post.hashtags} /></div>}
+      {post.type === "text" && <div className="min-w-0 px-4 pb-3"><p className="whitespace-pre-line break-words [overflow-wrap:anywhere] text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p><Hashtags tags={post.hashtags} /></div>}
+      {post.type === "photo" && <div className="min-w-0 px-4 pb-3"><p className="whitespace-pre-line break-words [overflow-wrap:anywhere] text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p><Hashtags tags={post.hashtags} /></div>}
       {post.type === "achievement" && post.achievement && <AchievementPost achievement={post.achievement} />}
       {post.type === "event" && post.event && <EventPost event={post.event} rsvp={eventRsvp} onShare={() => setShareOpen(true)} />}
       {post.type === "poll" && post.poll && <PollCard poll={post.poll} pollVotes={pollVotes} voted={voted} onVote={handleVote} readOnly={readOnly} />}
@@ -402,8 +402,8 @@ function AchievementPost({ achievement }: { achievement: NonNullable<FeedPost["a
       <h3 className="mt-0.5 max-w-full break-words font-display text-2xl font-bold text-[#5930b5]">{achievement.child}</h3>
       <div className="my-2 flex w-full max-w-lg items-center gap-2" aria-hidden="true"><span className="h-px flex-1 bg-[#d9b84c]/70" /><Sparkles className="size-3 text-[#d9b84c]" /><span className="h-px flex-1 bg-[#d9b84c]/70" /></div>
       <p className="text-xs font-medium text-[#493b70]">has achieved</p>
-      <div className="relative mt-2 w-full max-w-md rounded-xl border border-[#dfb83f] bg-background px-4 py-2.5 shadow-sm"><Sparkles aria-hidden="true" className="absolute -left-2 -top-2 size-4 text-[#d9b84c]" /><Sparkles aria-hidden="true" className="absolute -right-2 -bottom-2 size-4 text-[#d9b84c]" /><p className="break-words font-display text-3xl font-bold leading-tight text-[#4e27a3] sm:text-4xl">{achievement.title}</p></div>
-      <div className="relative mt-3 w-full max-w-xl rounded-xl border border-[#ded3f2] bg-[#f4efff]/85 px-5 py-3 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]"><span aria-hidden="true" className="absolute left-2 top-0 text-3xl leading-none text-[#8b65d6]">&ldquo;</span><p className="whitespace-pre-line break-words px-3 text-center text-sm leading-6 text-[#493b70]">{achievement.description}</p><span aria-hidden="true" className="absolute bottom-[-5px] right-2 text-3xl leading-none text-[#8b65d6]">&rdquo;</span></div><div aria-hidden="true" className="mt-4 flex items-center gap-3 text-[#d9b84c]/70"><span className="h-px w-12 bg-[#d9b84c]/60" /><Sparkles className="size-3" /><span className="h-px w-12 bg-[#d9b84c]/60" /></div>
+      <div className="relative mt-2 w-full max-w-md rounded-xl border border-[#dfb83f] bg-background px-4 py-2.5 shadow-sm"><Sparkles aria-hidden="true" className="absolute -left-2 -top-2 size-4 text-[#d9b84c]" /><Sparkles aria-hidden="true" className="absolute -right-2 -bottom-2 size-4 text-[#d9b84c]" /><p className="break-words [overflow-wrap:anywhere] font-display text-3xl font-bold leading-tight text-[#4e27a3] sm:text-4xl">{achievement.title}</p></div>
+      <div className="relative mt-3 w-full max-w-xl rounded-xl border border-[#ded3f2] bg-[#f4efff]/85 px-5 py-3 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]"><span aria-hidden="true" className="absolute left-2 top-0 text-3xl leading-none text-[#8b65d6]">&ldquo;</span><p className="whitespace-pre-line break-words [overflow-wrap:anywhere] px-3 text-center text-sm leading-6 text-[#493b70]">{achievement.description}</p><span aria-hidden="true" className="absolute bottom-[-5px] right-2 text-3xl leading-none text-[#8b65d6]">&rdquo;</span></div><div aria-hidden="true" className="mt-4 flex items-center gap-3 text-[#d9b84c]/70"><span className="h-px w-12 bg-[#d9b84c]/60" /><Sparkles className="size-3" /><span className="h-px w-12 bg-[#d9b84c]/60" /></div>
     </div>
   </section>
 }
@@ -414,9 +414,9 @@ function EventPost({ event, rsvp, onShare }: { event: NonNullable<FeedPost["even
     <div className="relative grid items-center gap-5 md:grid-cols-[minmax(0,1.08fr)_minmax(220px,0.92fr)]">
       <div className="min-w-0">
         <Badge className="border-0 bg-[#6f32d5] px-3 py-1 text-[11px] font-semibold text-white">Upcoming event</Badge>
-        <h3 className="mt-3 break-words font-display text-2xl font-bold leading-tight text-[#25213d] sm:text-3xl">{event.title}</h3>
+        <h3 className="mt-3 break-words [overflow-wrap:anywhere] font-display text-2xl font-bold leading-tight text-[#25213d] sm:text-3xl">{event.title}</h3>
         <div className="mt-3 grid gap-2 text-sm text-[#5d527f] sm:grid-cols-3 sm:gap-3"><EventDetail icon={CalendarDays} label={eventDisplayDate(event)} /><EventDetail icon={Clock3} label={event.time} /><EventDetail icon={MapPin} label={event.location} />{event.organizer && <EventDetail icon={Users} label={`Organized by ${event.organizer}`} />}</div>
-        <p className="mt-3 whitespace-pre-line break-words text-sm leading-6 text-[#302b4a]">{event.description}</p>
+        <p className="mt-3 whitespace-pre-line break-words [overflow-wrap:anywhere] text-sm leading-6 text-[#302b4a]">{event.description}</p>
       </div>
       <CalendarIllustration />
     </div>
@@ -459,7 +459,7 @@ function Hashtags({ tags }: { tags: string[] }) {
 
 function PollCard({ poll, pollVotes, voted, onVote, readOnly = false }: { poll: NonNullable<FeedPost["poll"]>; pollVotes: number[]; voted: number | null; onVote: (index: number) => void; readOnly?: boolean }) {
   const total = pollVotes.reduce((sum, vote) => sum + vote, 0)
-  return <div className="mx-4 mb-3 grid gap-2 rounded-xl border border-border p-4"><p className="font-semibold text-foreground">{poll.question}</p>{poll.options.map((option, index) => { const count = pollVotes[index] ?? 0; const percentage = total ? Math.round((count / total) * 100) : 0; return <button key={option} type="button" disabled={readOnly} aria-pressed={voted === index} onClick={() => onVote(index)} className={`relative flex min-h-10 items-center justify-between overflow-hidden rounded-lg border px-3 py-2 text-left text-sm disabled:cursor-default ${voted === index ? "border-brand bg-brand-muted text-brand" : `border-border ${readOnly ? "" : "hover:bg-secondary"}`}`}><span className="absolute inset-y-0 left-0 bg-brand-muted" style={{ width: `${percentage}%` }} /><span className="relative">{option}</span><span className="relative tabular-nums">{voted !== null ? `${percentage}%` : count}</span></button> })}<p className="text-xs text-muted-foreground">{total} {total === 1 ? "vote" : "votes"}{voted !== null ? " · You voted" : ""}</p></div>
+  return <div className="mx-4 mb-3 grid min-w-0 gap-2 rounded-xl border border-border p-4"><p className="break-words [overflow-wrap:anywhere] font-semibold text-foreground">{poll.question}</p>{poll.options.map((option, index) => { const count = pollVotes[index] ?? 0; const percentage = total ? Math.round((count / total) * 100) : 0; return <button key={option} type="button" disabled={readOnly} aria-pressed={voted === index} onClick={() => onVote(index)} className={`relative flex min-h-10 items-center justify-between gap-2 overflow-hidden rounded-lg border px-3 py-2 text-left text-sm disabled:cursor-default ${voted === index ? "border-brand bg-brand-muted text-brand" : `border-border ${readOnly ? "" : "hover:bg-secondary"}`}`}><span className="absolute inset-y-0 left-0 bg-brand-muted" style={{ width: `${percentage}%` }} /><span className="relative min-w-0 break-words [overflow-wrap:anywhere]">{option}</span><span className="relative shrink-0 tabular-nums">{voted !== null ? `${percentage}%` : count}</span></button> })}<p className="text-xs text-muted-foreground">{total} {total === 1 ? "vote" : "votes"}{voted !== null ? " · You voted" : ""}</p></div>
 }
 
 function ActionButton({
