@@ -4,7 +4,7 @@ import { useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import useSWR from "swr"
-import { getSpaceCounts } from "@/app/actions/spaces"
+import { getSpaceCounts, getInviteableUsers, inviteToSpace } from "@/app/actions/spaces"
 import { Bell, BookOpen, Check, Globe2, Heart, Layers3, MessageCircle, Search, Users, UserPlus } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { PageShell } from "@/components/parent/page-shell"
 import { useSocialStore } from "@/components/parent/social-store"
-import { INVITE_CONTACTS, type SocialSpace } from "@/lib/parent-data"
+import type { SocialSpace } from "@/lib/parent-data"
 
 type Kind = "groups" | "communities" | "saved" | "timetable" | "network" | "messages"
 type SocialKind = "groups" | "communities"
@@ -101,6 +101,9 @@ function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpen
   const [category, setCategory] = useState(categories[0])
   const [privacy, setPrivacy] = useState<"Public" | "Private">(isGroups ? "Private" : "Public")
   const [invitees, setInvitees] = useState<string[]>([])
+  // Real users to invite, from the DB (neon_auth.user + profiles) — never the old
+  // dummy INVITE_CONTACTS list. Loaded only while the dialog is open.
+  const { data: people } = useSWR(open ? "invite-users" : null, getInviteableUsers, { revalidateOnFocus: false })
 
   function reset() { setName(""); setDescription(""); setCategory(categories[0]); setPrivacy(isGroups ? "Private" : "Public"); setInvitees([]) }
   function toggleInvitee(id: string) { setInvitees((current) => (current.includes(id) ? current.filter((value) => value !== id) : [...current, id])) }
@@ -109,7 +112,6 @@ function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpen
     if (!trimmed) return
     let slug = slugify(trimmed)
     if (spaces.some((space) => space.slug === slug)) slug = `${slug}-${Date.now().toString().slice(-4)}`
-    const inviteeNames = INVITE_CONTACTS.filter((contact) => invitees.includes(contact.id)).map((contact) => contact.name)
     const space: SocialSpace = {
       slug,
       kind,
@@ -122,11 +124,16 @@ function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpen
       tone: "bg-violet-100 text-violet-700",
       initials: initialsOf(trimmed),
       privacy,
-      memberNames: inviteeNames,
+      // Selected invitees are NOT members — they become real pending rows in
+      // space_invitations below, so no dummy names are stored here.
+      memberNames: [],
     }
-    // Records the creator as an ADMIN member in the DB (auto-join + auto-admin) before navigating,
-    // so the new space's detail page already recognizes the owner.
+    // Records the creator as an ADMIN member in the DB (auto-join + auto-admin) first, so the
+    // new space's detail page already recognizes the owner AND the creator is allowed to invite.
     await addSpace(space)
+    // Persist the chosen invitees as REAL pending invitations (not memberships). They stay
+    // `pending` in space_invitations until each user actually joins/accepts.
+    if (invitees.length) { try { await inviteToSpace(slug, invitees) } catch {} }
     reset()
     onOpenChange(false)
     router.push(`/parent/${kind}/${slug}`)
@@ -144,7 +151,7 @@ function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpen
           <div className="grid gap-2"><Label htmlFor="space-desc">Description</Label><Textarea id="space-desc" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What is this space about?" /></div>
           <div className="grid gap-2"><Label>Category</Label><div className="flex flex-wrap gap-2">{categories.map((option) => <Button key={option} type="button" size="sm" variant={category === option ? "default" : "outline"} className="rounded-xl" onClick={() => setCategory(option)}>{option}</Button>)}</div></div>
           <div className="grid gap-2"><Label>Privacy</Label><div className="flex flex-wrap gap-2">{(["Public", "Private"] as const).map((option) => <Button key={option} type="button" size="sm" variant={privacy === option ? "default" : "outline"} className="rounded-xl" onClick={() => setPrivacy(option)}>{option}</Button>)}</div></div>
-          <div className="grid gap-2"><Label>Invite members <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label><ul className="max-h-40 space-y-1 overflow-y-auto rounded-xl border border-border p-1">{INVITE_CONTACTS.map((contact) => { const selected = invitees.includes(contact.id); return <li key={contact.id}><button type="button" onClick={() => toggleInvitee(contact.id)} className="flex w-full items-center gap-3 rounded-lg p-2 text-left hover:bg-secondary"><Avatar className="size-8"><AvatarImage src={contact.avatar || "/placeholder.svg"} alt={contact.name} /><AvatarFallback>{initialsOf(contact.name)}</AvatarFallback></Avatar><span className="min-w-0 flex-1 truncate text-sm font-medium">{contact.name}</span><span className={`grid size-5 place-items-center rounded-full border ${selected ? "border-brand bg-brand text-brand-foreground" : "border-input"}`}>{selected && <Check className="size-3.5" />}</span></button></li> })}</ul></div>
+          <div className="grid gap-2"><Label>Invite members <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label><ul className="max-h-40 space-y-1 overflow-y-auto rounded-xl border border-border p-1">{people === undefined ? <li className="p-3 text-sm text-muted-foreground">Loading members…</li> : people.length === 0 ? <li className="p-3 text-sm text-muted-foreground">No other members to invite yet.</li> : people.map((person) => { const selected = invitees.includes(person.userId); return <li key={person.userId}><button type="button" onClick={() => toggleInvitee(person.userId)} className="flex w-full items-center gap-3 rounded-lg p-2 text-left hover:bg-secondary"><Avatar className="size-8"><AvatarImage src={person.avatar || "/placeholder.svg"} alt={person.name} /><AvatarFallback>{initialsOf(person.name)}</AvatarFallback></Avatar><span className="min-w-0 flex-1 truncate text-sm font-medium">{person.name}</span><span className={`grid size-5 place-items-center rounded-full border ${selected ? "border-brand bg-brand text-brand-foreground" : "border-input"}`}>{selected && <Check className="size-3.5" />}</span></button></li> })}</ul></div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>

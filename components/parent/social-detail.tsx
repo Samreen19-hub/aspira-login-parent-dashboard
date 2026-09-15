@@ -17,8 +17,7 @@ import { useFeedStore, createServerPost, useServerFeed, readPostFocus, clearPost
 import { PostHiddenNotice } from "@/components/parent/post-hidden-notice"
 import { deletePost, hidePost, unhidePost } from "@/app/actions/posts"
 import { useSocialStore } from "@/components/parent/social-store"
-import { getMe, getSpace as fetchSpaceState, getSpaceMembers, leaveSpace as leaveSpaceAction, makeAdmin as makeAdminAction, removeMember as removeMemberAction, type SpaceMember } from "@/app/actions/spaces"
-import { INVITE_CONTACTS } from "@/lib/parent-data"
+import { getMe, getSpace as fetchSpaceState, getSpaceMembers, getInviteableSpaceUsers, getPendingSpaceInvitations, inviteToSpace, leaveSpace as leaveSpaceAction, makeAdmin as makeAdminAction, removeMember as removeMemberAction, type SpaceMember, type PendingInvitation } from "@/app/actions/spaces"
 
 function initialsOf(name: string) {
   return (
@@ -37,7 +36,6 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const { posts, removePost, removePostsByScope } = useFeedStore()
   const { posts: serverPosts, mutate: mutateFeed } = useServerFeed(slug)
   const router = useRouter()
-  const [invited, setInvited] = useState<string[]>([])
   const [muted, setMuted] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [inviteOpen, setInviteOpen] = useState(false)
@@ -72,6 +70,9 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
 
   // The real roster — loaded only for viewers with full access (members/followers/admins).
   const { data: memberRows, mutate: mutateMembers } = useSWR(validSpace && hasFullAccess ? ["space-members", slug] : null, () => getSpaceMembers(slug), { revalidateOnFocus: false })
+  // Real pending invitations for this space (DB-backed, replaces the old dummy
+  // local `invited` state). Same audience as the roster.
+  const { data: pendingRows, mutate: mutateInvites } = useSWR(validSpace && hasFullAccess ? ["space-invites", slug] : null, () => getPendingSpaceInvitations(slug), { revalidateOnFocus: false })
 
   useEffect(() => {
     const id = readPostFocus()
@@ -172,7 +173,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
     )
   }
 
-  const invitedContacts = INVITE_CONTACTS.filter((contact) => invited.includes(contact.id))
+  const pendingInvites: PendingInvitation[] = pendingRows ?? []
   const members: SpaceMember[] = memberRows ?? []
   const myUserId = me?.id ?? spaceState?.myUserId ?? null
   // Everyone in the space other than the signed-in user.
@@ -361,11 +362,11 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
                   </div>
                 )
               })}
-              {invitedContacts.map((contact) => (
-                <div key={contact.id} className="flex items-center justify-between gap-3">
+              {pendingInvites.map((invite) => (
+                <div key={invite.invitationId} className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <Avatar className="size-9"><AvatarImage src={contact.avatar || "/placeholder.svg"} alt={contact.name} /><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(contact.name)}</AvatarFallback></Avatar>
-                    <span className="text-sm font-medium">{contact.name}</span>
+                    <Avatar className="size-9"><AvatarImage src={invite.avatar ?? undefined} alt={invite.name} /><AvatarFallback className="bg-brand-muted text-xs font-semibold text-brand">{initialsOf(invite.name)}</AvatarFallback></Avatar>
+                    <span className="text-sm font-medium">{invite.name}</span>
                   </div>
                   <Badge variant="outline" className="text-muted-foreground">Invited</Badge>
                 </div>
@@ -391,8 +392,8 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
         </div>
       </div>
 
-      <InviteMembersDialog open={inviteOpen} onOpenChange={setInviteOpen} spaceTitle={record.title} invited={invited} onInvite={(ids) => setInvited((current) => Array.from(new Set([...current, ...ids])))} />
-      <ViewAllMembersDialog open={membersOpen} onOpenChange={setMembersOpen} spaceTitle={record.title} members={members} invitedContacts={invitedContacts.map((contact) => contact.name)} myUserId={myUserId} canManage={admin} onRequestRemove={(member) => setRemoveTarget(member)} onRequestMakeAdmin={(member) => setMakeAdminTarget(member)} />
+      <InviteMembersDialog open={inviteOpen} onOpenChange={setInviteOpen} slug={slug} spaceTitle={record.title} onInvited={async () => { await mutateInvites() }} />
+      <ViewAllMembersDialog open={membersOpen} onOpenChange={setMembersOpen} spaceTitle={record.title} members={members} invitedContacts={pendingInvites.map((invite) => invite.name)} myUserId={myUserId} canManage={admin} onRequestRemove={(member) => setRemoveTarget(member)} onRequestMakeAdmin={(member) => setMakeAdminTarget(member)} />
       {admin && <DeleteSpaceDialog open={deleteOpen} onOpenChange={setDeleteOpen} isGroup={isGroup} memberCount={memberCount} onConfirm={handleDelete} />}
       {admin && <RemoveMemberDialog open={removeTarget !== null} onOpenChange={(value) => { if (!value) setRemoveTarget(null) }} isGroup={isGroup} memberName={removeTarget?.name ?? ""} onConfirm={handleConfirmRemove} />}
       {admin && <MakeAdminDialog open={makeAdminTarget !== null} onOpenChange={(value) => { if (!value) setMakeAdminTarget(null) }} isGroup={isGroup} memberName={makeAdminTarget?.name ?? ""} onConfirm={handleConfirmMakeAdmin} />}
@@ -523,12 +524,31 @@ function LeaveSpaceDialog({ open, onOpenChange, isGroup, mustTransfer, candidate
   )
 }
 
-function InviteMembersDialog({ open, onOpenChange, spaceTitle, invited, onInvite }: { open: boolean; onOpenChange: (open: boolean) => void; spaceTitle: string; invited: string[]; onInvite: (ids: string[]) => void }) {
+// Real, DB-backed invite flow. The list of people is loaded from the server
+// (`getInviteableSpaceUsers`) — already excluding the current user, existing
+// members, and anyone with a pending invitation — so there is no client-side
+// "already invited" bookkeeping. Selecting people and sending persists real
+// `pending` rows via `inviteToSpace`; `onInvited` revalidates the parent's
+// pending-invitation view. Used for BOTH Groups and Communities.
+function InviteMembersDialog({ open, onOpenChange, slug, spaceTitle, onInvited }: { open: boolean; onOpenChange: (open: boolean) => void; slug: string; spaceTitle: string; onInvited: () => void | Promise<void> }) {
   const [query, setQuery] = useState("")
   const [selected, setSelected] = useState<string[]>([])
-  const results = useMemo(() => INVITE_CONTACTS.filter((contact) => contact.name.toLowerCase().includes(query.toLowerCase())), [query])
+  const [sending, setSending] = useState(false)
+  // Load real users only while the dialog is open so a closed dialog does no work.
+  const { data: people, isLoading } = useSWR(open ? ["inviteable", slug] : null, () => getInviteableSpaceUsers(slug), { revalidateOnFocus: false })
+  const results = useMemo(() => (people ?? []).filter((person) => person.name.toLowerCase().includes(query.toLowerCase())), [people, query])
   function toggle(id: string) { setSelected((current) => (current.includes(id) ? current.filter((value) => value !== id) : [...current, id])) }
-  function send() { onInvite(selected); setSelected([]); setQuery(""); onOpenChange(false) }
+  async function send() {
+    if (!selected.length) return
+    setSending(true)
+    try {
+      await inviteToSpace(slug, selected)
+      await onInvited()
+      setSelected([]); setQuery(""); onOpenChange(false)
+    } finally {
+      setSending(false)
+    }
+  }
   return (
     <Dialog open={open} onOpenChange={(value) => { if (!value) { setSelected([]); setQuery("") } onOpenChange(value) }}>
       <DialogContent>
@@ -538,23 +558,24 @@ function InviteMembersDialog({ open, onOpenChange, spaceTitle, invited, onInvite
         </DialogHeader>
         <div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search people..." className="h-11 rounded-xl pl-9" aria-label="Search people to invite" /></div>
         <ul className="max-h-72 space-y-1 overflow-y-auto">
-          {results.length ? results.map((contact) => {
-            const alreadyInvited = invited.includes(contact.id)
-            const isSelected = selected.includes(contact.id)
+          {isLoading ? (
+            <li className="p-4 text-center text-sm text-muted-foreground">Loading people…</li>
+          ) : results.length ? results.map((person) => {
+            const isSelected = selected.includes(person.userId)
             return (
-              <li key={contact.id}>
-                <button type="button" disabled={alreadyInvited} onClick={() => toggle(contact.id)} className="flex w-full items-center gap-3 rounded-xl border border-transparent p-2 text-left hover:bg-secondary disabled:opacity-60 disabled:hover:bg-transparent">
-                  <Avatar className="size-10"><AvatarImage src={contact.avatar || "/placeholder.svg"} alt={contact.name} /><AvatarFallback>{initialsOf(contact.name)}</AvatarFallback></Avatar>
-                  <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{contact.name}</p><p className="truncate text-xs text-muted-foreground">{contact.detail}</p></div>
-                  {alreadyInvited ? <Badge variant="outline" className="text-muted-foreground">Invited</Badge> : <span className={`grid size-5 place-items-center rounded-full border ${isSelected ? "border-brand bg-brand text-brand-foreground" : "border-input"}`}>{isSelected && <Check className="size-3.5" />}</span>}
+              <li key={person.userId}>
+                <button type="button" onClick={() => toggle(person.userId)} className="flex w-full items-center gap-3 rounded-xl border border-transparent p-2 text-left hover:bg-secondary">
+                  <Avatar className="size-10"><AvatarImage src={person.avatar ?? undefined} alt={person.name} /><AvatarFallback>{initialsOf(person.name)}</AvatarFallback></Avatar>
+                  <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{person.name}</p>{person.headline && <p className="truncate text-xs text-muted-foreground">{person.headline}</p>}</div>
+                  <span className={`grid size-5 place-items-center rounded-full border ${isSelected ? "border-brand bg-brand text-brand-foreground" : "border-input"}`}>{isSelected && <Check className="size-3.5" />}</span>
                 </button>
               </li>
             )
-          }) : <li className="p-4 text-center text-sm text-muted-foreground">No people match that search.</li>}
+          }) : <li className="p-4 text-center text-sm text-muted-foreground">{query ? "No people match that search." : "Everyone in your network is already a member or invited."}</li>}
         </ul>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button disabled={!selected.length} onClick={send}><UserPlus data-icon="inline-start" />Send {selected.length ? `${selected.length} ` : ""}invite{selected.length === 1 ? "" : "s"}</Button>
+          <Button disabled={!selected.length || sending} onClick={send}><UserPlus data-icon="inline-start" />{sending ? "Sending…" : `Send ${selected.length ? `${selected.length} ` : ""}invite${selected.length === 1 ? "" : "s"}`}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

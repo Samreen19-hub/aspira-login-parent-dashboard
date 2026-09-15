@@ -379,6 +379,64 @@ export function ensureSpaceMembersTable(): Promise<void> {
 }
 
 /**
+ * Lazily provisions the `public.space_invitations` table (and its supporting
+ * indexes) using the shared pool, following the exact same idempotent
+ * (`IF NOT EXISTS`), memoized, schema-qualified pattern as the helpers above.
+ * This is a purely additive table that backs REAL pending invitations to a
+ * Groups/Communities space. It sits ALONGSIDE `public.space_members` and never
+ * modifies it: an invitation is not membership — membership is created only when
+ * a recipient accepts. It is unrelated to the group-chat tables. No foreign keys
+ * to `neon_auth.user`, matching the existing Aspira convention.
+ *
+ * `status` is free-text capable of `pending | accepted | declined | cancelled`.
+ * The PARTIAL unique index enforces "no duplicate ACTIVE invitation" — only one
+ * `pending` row may exist per `(space_slug, invitee_id)` — while still allowing a
+ * fresh invitation after a previous one was declined/cancelled. The slug index
+ * covers per-space pending-invitation lookups.
+ */
+let spaceInvitationsReady: Promise<void> | null = null
+export function ensureSpaceInvitationsTable(): Promise<void> {
+  if (!spaceInvitationsReady) {
+    spaceInvitationsReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.space_invitations (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          space_slug text NOT NULL,
+          inviter_id uuid NOT NULL,
+          invitee_id uuid NOT NULL,
+          status text NOT NULL DEFAULT 'pending',
+          created_at timestamptz NOT NULL DEFAULT now(),
+          responded_at timestamptz
+        )
+      `)
+      // Only ONE active (pending) invitation may exist per space+invitee. A
+      // partial index lets a new invitation be sent again after a prior one was
+      // declined/cancelled, since those rows are excluded from the constraint.
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS space_invitations_pending_unique
+        ON public.space_invitations (space_slug, invitee_id)
+        WHERE status = 'pending'
+      `)
+      // Covers per-space pending-invitation roster lookups.
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS space_invitations_slug
+        ON public.space_invitations (space_slug)
+      `)
+      // Covers "invitations addressed to me" lookups for a recipient inbox.
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS space_invitations_invitee
+        ON public.space_invitations (invitee_id)
+      `)
+    })().catch((error) => {
+      // Reset so a transient failure can be retried on the next call.
+      spaceInvitationsReady = null
+      throw error
+    })
+  }
+  return spaceInvitationsReady
+}
+
+/**
  * Lazily provisions the `public.post_hides` table (and its supporting indexes)
  * using the shared pool, following the exact same idempotent (`IF NOT EXISTS`),
  * memoized, schema-qualified pattern as the helpers above. This is a purely
