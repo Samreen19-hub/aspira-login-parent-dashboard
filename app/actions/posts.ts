@@ -23,15 +23,7 @@ import {
   spaceMembers,
   user,
 } from '@/lib/db/schema'
-
-/**
- * Maximum length of a single comment, in JavaScript characters. Enforced on BOTH
- * the client (input `maxLength` + submit guard) and the server (`addComment`),
- * so an oversized comment is rejected with a clean, user-readable error long
- * before it could reach the Next.js Server Action body-size limit. This is a
- * character cap, deliberately NOT a byte/1 MB limit.
- */
-export const MAX_COMMENT_LENGTH = 2000
+import { MAX_COMMENT_LENGTH, MAX_TEXT_LENGTH } from '@/lib/validation'
 
 /**
  * DB-backed User Posts, phase one. Every post type (achievement, photo, event,
@@ -215,6 +207,31 @@ function sanitizePayload(
 export async function createPost(input: CreatePostInput): Promise<PostView> {
   const authorId = await getUserId()
   if (!input.type) throw new Error('A post type is required.')
+
+  // Server-side character cap mirroring the composer. Applies ONLY to free-form
+  // user text: the plain text/photo `body` and the Achievement description. Event
+  // titles/dates, poll options, and other structured fields are untouched.
+  if (
+    (input.type === 'text' || input.type === 'photo') &&
+    typeof input.body === 'string' &&
+    input.body.length > MAX_TEXT_LENGTH
+  ) {
+    throw new Error(
+      `A post cannot exceed ${MAX_TEXT_LENGTH.toLocaleString()} characters.`,
+    )
+  }
+  if (input.type === 'achievement') {
+    const achievement = input.payload?.achievement as
+      | { description?: unknown }
+      | undefined
+    const description = achievement?.description
+    if (typeof description === 'string' && description.length > MAX_TEXT_LENGTH) {
+      throw new Error(
+        `An achievement cannot exceed ${MAX_TEXT_LENGTH.toLocaleString()} characters.`,
+      )
+    }
+  }
+
   await ensurePostsTables()
 
   const rows = await db

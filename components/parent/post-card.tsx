@@ -11,7 +11,8 @@ import type { FeedPost } from "@/lib/parent-data"
 import { eventDisplayDate } from "@/lib/parent-data"
 import { useFeedStore, type RsvpFlags } from "@/components/parent/feed-store"
 import { EventRsvpBar } from "@/components/parent/event-rsvp-bar"
-import { toggleLike, addComment as addCommentAction, votePoll, MAX_COMMENT_LENGTH } from "@/app/actions/posts"
+import { toggleLike, addComment as addCommentAction, votePoll } from "@/app/actions/posts"
+import { MAX_COMMENT_LENGTH } from "@/lib/validation"
 
 /**
  * Live RSVP wiring passed to the Home Feed event card. Counts, flags and
@@ -38,7 +39,7 @@ function initialsOf(name: string) {
     .join("")
 }
 
-export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBacked = false, eventRsvp }: { post: FeedPost; onHide?: () => void; onDelete?: () => void; onOpen?: () => void; savedView?: boolean; serverBacked?: boolean; eventRsvp?: EventRsvpControls }) {
+export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBacked = false, eventRsvp, readOnly = false }: { post: FeedPost; onHide?: () => void; onDelete?: () => void; onOpen?: () => void; savedView?: boolean; serverBacked?: boolean; eventRsvp?: EventRsvpControls; readOnly?: boolean }) {
   const { savedIds, toggleSaved } = useFeedStore()
   const [liked, setLiked] = useState(post.likedByMe ?? false)
   const [likeCount, setLikeCount] = useState(post.likes)
@@ -97,6 +98,9 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
   // toggleLike() (authenticated user, public.post_likes) and reconcile to the
   // server count; seed/local posts keep the original local-only toggle.
   async function handleLike() {
+    // Read-only viewers (e.g. non-members browsing a public space) cannot like.
+    // The server also rejects this; the guard keeps the UI honest.
+    if (readOnly) return
     const next = !liked
     setLiked(next)
     setLikeCount((count) => count + (next ? 1 : -1))
@@ -114,6 +118,7 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
   // Poll: optimistic tally shift, then persist through votePoll() (public.poll_votes)
   // for DB-backed posts and reconcile to the server tally. Local posts stay local.
   function handleVote(index: number) {
+    if (readOnly) return
     if (index === voted) return
     const previous = voted
     setPollVotes((votes) => votes.map((vote, i) => vote + (i === index ? 1 : i === previous ? -1 : 0)))
@@ -135,6 +140,7 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
   // author resolved server-side (no hardcoded identity). Seed/local posts keep
   // the original local-only behavior, including optional image attachments.
   async function addComment() {
+    if (readOnly) return
     const body = comment.trim()
     if (!body && !commentImage) return
     // Client-side length guard mirrors the server cap so an oversized comment is
@@ -206,7 +212,7 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
       {post.type === "photo" && <div className="px-4 pb-3"><p className="whitespace-pre-line text-[15px] leading-relaxed text-foreground text-pretty">{post.body}</p><Hashtags tags={post.hashtags} /></div>}
       {post.type === "achievement" && post.achievement && <AchievementPost achievement={post.achievement} />}
       {post.type === "event" && post.event && <EventPost event={post.event} rsvp={eventRsvp} onShare={() => setShareOpen(true)} />}
-      {post.type === "poll" && post.poll && <PollCard poll={post.poll} pollVotes={pollVotes} voted={voted} onVote={handleVote} />}
+      {post.type === "poll" && post.poll && <PollCard poll={post.poll} pollVotes={pollVotes} voted={voted} onVote={handleVote} readOnly={readOnly} />}
       {/* Image */}
       {post.image && (
         <div className="relative aspect-[16/9] w-full overflow-hidden bg-secondary">
@@ -220,7 +226,8 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
           <button
             type="button"
             onClick={handleLike}
-            className="flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-brand"
+            disabled={readOnly}
+            className="flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-brand disabled:pointer-events-none"
           >
             <span
               className={`grid size-6 place-items-center rounded-full ${liked ? "bg-brand text-brand-foreground" : "bg-brand-muted text-brand"}`}
@@ -238,7 +245,7 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
         </div>
 
         <div className="flex items-center justify-between py-1.5">
-          <ActionButton icon={Heart} label="Like" active={liked} onClick={handleLike} />
+          <ActionButton icon={Heart} label="Like" active={liked} onClick={handleLike} disabled={readOnly} />
           <ActionButton icon={MessageCircle} label="Comment" onClick={() => setShowComments((v) => !v)} />
           <ActionButton icon={Share2} label="Share" onClick={() => setShareOpen(true)} />
           <ActionButton
@@ -289,16 +296,16 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
           <ul className="mt-3 space-y-3">
             {comments.map((c) => (
               <li key={c.id} className="flex items-start gap-2">
-                <Avatar className="size-8">
+                <Avatar className="size-8 shrink-0">
                   <AvatarImage src={c.avatar || "/placeholder.svg"} alt={c.author} />
                   <AvatarFallback>{initialsOf(c.author)}</AvatarFallback>
                 </Avatar>
-                <div className="rounded-2xl bg-secondary/70 px-3 py-2">
+                <div className="min-w-0 max-w-full rounded-2xl bg-secondary/70 px-3 py-2">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-foreground">{c.author}</span>
                     <span className="text-xs text-muted-foreground">{c.time}</span>
                   </div>
-                  {c.text && <p className="text-sm text-foreground">{c.text}</p>}
+                  {c.text && <p className="text-sm text-foreground break-words [overflow-wrap:anywhere]">{c.text}</p>}
                   {c.image && <Image src={c.image} alt="Comment attachment" width={180} height={120} className="mt-2 rounded-lg object-cover" />}
                 </div>
               </li>
@@ -308,6 +315,13 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
       </div>
 
       {/* Comment box */}
+      {readOnly ? (
+        <div className="border-t border-border p-4">
+          <p className="rounded-full bg-secondary/60 px-4 py-2.5 text-center text-sm text-muted-foreground">
+            Join this space to like, comment, and vote.
+          </p>
+        </div>
+      ) : (
       <div className="border-t border-border p-4">
         <div className="flex items-center gap-3">
           <Avatar className="size-9 shrink-0">
@@ -352,7 +366,27 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
           </div>
         )}
       </div>
+      )}
       <Dialog open={shareOpen} onOpenChange={setShareOpen}><DialogContent><DialogHeader><DialogTitle>Share post</DialogTitle><DialogDescription>Choose how you would like to share this update.</DialogDescription></DialogHeader><div className="grid gap-2"><Button variant="outline" className="justify-start gap-2" onClick={async () => { try { await navigator.clipboard.writeText(`${window.location.origin}/parent/posts/${post.id}`) } catch {} setCopied(true); setTimeout(() => setCopied(false), 1800) }}><Copy className="size-4" />{copied ? "Link copied!" : "Copy Link"}</Button><Button variant="outline" className="justify-start gap-2"><Users className="size-4" />Share to Network</Button><Button variant="outline" className="justify-start gap-2"><MessageSquare className="size-4" />Share via Message</Button></div><DialogFooter><Button variant="outline" onClick={() => setShareOpen(false)}>Done</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={likersOpen} onOpenChange={setLikersOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Liked by</DialogTitle>
+            <DialogDescription>{likeCount} {likeCount === 1 ? "person likes" : "people like"} this post.</DialogDescription>
+          </DialogHeader>
+          <ul className="grid max-h-80 gap-1 overflow-y-auto">
+            {(post.likers ?? []).map((liker) => (
+              <li key={liker.id} className="flex items-center gap-3 rounded-lg px-1 py-1.5">
+                <Avatar className="size-9">
+                  <AvatarImage src={liker.avatar || "/placeholder.svg"} alt={liker.name} />
+                  <AvatarFallback>{initialsOf(liker.name)}</AvatarFallback>
+                </Avatar>
+                <span className="text-sm font-medium text-foreground">{liker.name}</span>
+              </li>
+            ))}
+          </ul>
+        </DialogContent>
+      </Dialog>
     </article>
   )
 }
@@ -423,9 +457,9 @@ function Hashtags({ tags }: { tags: string[] }) {
   return <p className="mt-2 flex flex-wrap gap-x-2 text-sm font-medium text-brand">{tags.map((tag) => <span key={tag}>{tag}</span>)}</p>
 }
 
-function PollCard({ poll, pollVotes, voted, onVote }: { poll: NonNullable<FeedPost["poll"]>; pollVotes: number[]; voted: number | null; onVote: (index: number) => void }) {
+function PollCard({ poll, pollVotes, voted, onVote, readOnly = false }: { poll: NonNullable<FeedPost["poll"]>; pollVotes: number[]; voted: number | null; onVote: (index: number) => void; readOnly?: boolean }) {
   const total = pollVotes.reduce((sum, vote) => sum + vote, 0)
-  return <div className="mx-4 mb-3 grid gap-2 rounded-xl border border-border p-4"><p className="font-semibold text-foreground">{poll.question}</p>{poll.options.map((option, index) => { const count = pollVotes[index] ?? 0; const percentage = total ? Math.round((count / total) * 100) : 0; return <button key={option} type="button" aria-pressed={voted === index} onClick={() => onVote(index)} className={`relative flex min-h-10 items-center justify-between overflow-hidden rounded-lg border px-3 py-2 text-left text-sm ${voted === index ? "border-brand bg-brand-muted text-brand" : "border-border hover:bg-secondary"}`}><span className="absolute inset-y-0 left-0 bg-brand-muted" style={{ width: `${percentage}%` }} /><span className="relative">{option}</span><span className="relative tabular-nums">{voted !== null ? `${percentage}%` : count}</span></button> })}<p className="text-xs text-muted-foreground">{total} {total === 1 ? "vote" : "votes"}{voted !== null ? " · You voted" : ""}</p></div>
+  return <div className="mx-4 mb-3 grid gap-2 rounded-xl border border-border p-4"><p className="font-semibold text-foreground">{poll.question}</p>{poll.options.map((option, index) => { const count = pollVotes[index] ?? 0; const percentage = total ? Math.round((count / total) * 100) : 0; return <button key={option} type="button" disabled={readOnly} aria-pressed={voted === index} onClick={() => onVote(index)} className={`relative flex min-h-10 items-center justify-between overflow-hidden rounded-lg border px-3 py-2 text-left text-sm disabled:cursor-default ${voted === index ? "border-brand bg-brand-muted text-brand" : `border-border ${readOnly ? "" : "hover:bg-secondary"}`}`}><span className="absolute inset-y-0 left-0 bg-brand-muted" style={{ width: `${percentage}%` }} /><span className="relative">{option}</span><span className="relative tabular-nums">{voted !== null ? `${percentage}%` : count}</span></button> })}<p className="text-xs text-muted-foreground">{total} {total === 1 ? "vote" : "votes"}{voted !== null ? " · You voted" : ""}</p></div>
 }
 
 function ActionButton({
@@ -435,6 +469,7 @@ function ActionButton({
   onClick,
   className = "",
   iconOnly = false,
+  disabled = false,
 }: {
   icon: React.ElementType
   label: string
@@ -442,12 +477,14 @@ function ActionButton({
   onClick?: () => void
   className?: string
   iconOnly?: boolean
+  disabled?: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-sm font-medium transition-colors hover:bg-secondary ${
+      disabled={disabled}
+      className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-sm font-medium transition-colors hover:bg-secondary disabled:pointer-events-none disabled:opacity-40 ${
         active ? "text-brand" : "text-muted-foreground"
       } ${className}`}
       aria-pressed={active}
