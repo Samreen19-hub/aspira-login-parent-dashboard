@@ -188,6 +188,11 @@ export function postViewToFeedPost(view: PostView): FeedPost {
     isMine: view.isMine,
     hiddenByMe: view.hiddenByMe,
     likedByMe: view.likedByMe,
+    likers: view.likers.map((u) => ({
+      id: u.id,
+      name: u.name ?? "Parent",
+      avatar: u.avatar ?? "/avatar-rashi.png",
+    })),
     myGoing: view.myGoing,
     myInterested: view.myInterested,
     serverBacked: true,
@@ -229,7 +234,14 @@ function applyOptimisticRsvp(list: PostView[], postId: string, going: boolean, i
  * surface, guaranteeing identical counts wherever the event is shown.
  */
 function useDbFeed(key: unknown[], fetcher: () => Promise<PostView[]>) {
-  const { data, mutate } = useSWR(key, fetcher, { revalidateOnFocus: false })
+  // Revalidate on focus and at an interval so likes/comments made by OTHER users
+  // become visible without a manual refresh. Combined with PostCard reconciling
+  // server props into its local state, another parent's like count and comments
+  // now propagate here. Home and space feeds share this path identically.
+  const { data, mutate } = useSWR(key, fetcher, {
+    revalidateOnFocus: true,
+    refreshInterval: 15000,
+  })
   const posts = useMemo(() => (data ?? []).map(postViewToFeedPost), [data])
   const setRsvpOptimistic = useCallback(
     (postId: string, going: boolean, interested: boolean) =>

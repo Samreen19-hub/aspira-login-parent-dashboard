@@ -3,7 +3,13 @@
 import { and, desc, eq, inArray, or, sql } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { auth } from '@/lib/auth'
-import { db, ensureFollowsTable, ensurePostHidesTable, ensurePostsTables } from '@/lib/db'
+import {
+  db,
+  ensureFollowsTable,
+  ensurePostHidesTable,
+  ensurePostsTables,
+  ensureSpaceMembersTable,
+} from '@/lib/db'
 import {
   connections,
   eventRsvps,
@@ -14,8 +20,18 @@ import {
   postLikes,
   posts,
   profiles,
+  spaceMembers,
   user,
 } from '@/lib/db/schema'
+
+/**
+ * Maximum length of a single comment, in JavaScript characters. Enforced on BOTH
+ * the client (input `maxLength` + submit guard) and the server (`addComment`),
+ * so an oversized comment is rejected with a clean, user-readable error long
+ * before it could reach the Next.js Server Action body-size limit. This is a
+ * character cap, deliberately NOT a byte/1 MB limit.
+ */
+export const MAX_COMMENT_LENGTH = 2000
 
 /**
  * DB-backed User Posts, phase one. Every post type (achievement, photo, event,
@@ -62,6 +78,12 @@ export type PostView = {
   author: PostAuthor
   likeCount: number
   likedByMe: boolean
+  /**
+   * Display info for every user who liked this post, resolved server-side from
+   * `public.post_likes` joined to `profiles`/`user`. Powers the "who liked"
+   * list. Length always equals `likeCount`.
+   */
+  likers: PostAuthor[]
   commentCount: number
   comments: PostCommentView[]
   /** Vote tally aligned to the poll's `options[]` (index -> count). */
@@ -112,6 +134,44 @@ async function getUserId(): Promise<string> {
   const session = await auth.api.getSession({ headers: await headers() })
   if (!session?.user) throw new Error('Unauthorized')
   return session.user.id
+}
+
+/**
+ * Authorizes an INTERACTION (like / comment / poll vote) on a post for the given
+ * signed-in user, enforced entirely server-side so the UI can never bypass it.
+ *
+ * Rule, keyed on the post's `scope`:
+ *   - `scope IS NULL` (Home feed): any authenticated user may interact — this
+ *     preserves the existing Home Feed behavior EXACTLY (no membership check).
+ *   - `scope` = a group/community slug: only a real member of that space
+ *     (a `public.space_members` row for the same slug) may interact. A public
+ *     space still lets a non-member VIEW the feed, but likes/comments/votes are
+ *     rejected here. This never touches the membership/invitation architecture.
+ *
+ * Throws when the post is missing or the user is not permitted to interact.
+ */
+async function assertCanInteract(postId: string, userId: string): Promise<void> {
+  const [row] = await db
+    .select({ scope: posts.scope })
+    .from(posts)
+    .where(eq(posts.id, postId))
+    .limit(1)
+  if (!row) throw new Error('A valid post is required.')
+  // Home feed posts (no scope) keep the existing behavior — always allowed.
+  if (row.scope == null) return
+
+  // Scoped posts belong to a group/community: require real membership.
+  await ensureSpaceMembersTable()
+  const [member] = await db
+    .select({ id: spaceMembers.id })
+    .from(spaceMembers)
+    .where(
+      and(eq(spaceMembers.slug, row.scope), eq(spaceMembers.userId, userId)),
+    )
+    .limit(1)
+  if (!member) {
+    throw new Error('Join this space to interact with its posts.')
+  }
 }
 
 /**
@@ -182,6 +242,7 @@ export async function createPost(input: CreatePostInput): Promise<PostView> {
     author: author.get(authorId) ?? { id: authorId, name: null, avatar: null },
     likeCount: 0,
     likedByMe: false,
+    likers: [],
     commentCount: 0,
     comments: [],
     hiddenByMe: false,
@@ -372,9 +433,13 @@ async function annotatePosts(
 
   const likeCounts = new Map<string, number>()
   const likedByMe = new Set<string>()
+  const likerIdsByPost = new Map<string, string[]>()
   for (const like of likeRows) {
     likeCounts.set(like.postId, (likeCounts.get(like.postId) ?? 0) + 1)
     if (like.userId === meId) likedByMe.add(like.postId)
+    const list = likerIdsByPost.get(like.postId) ?? []
+    list.push(like.userId)
+    likerIdsByPost.set(like.postId, list)
   }
 
   // Comments, oldest first (natural reading order), with author display info.
@@ -470,6 +535,7 @@ async function annotatePosts(
   const authorIds = new Set<string>()
   for (const p of postRows) authorIds.add(p.authorId)
   for (const c of commentRows) authorIds.add(c.authorId)
+  for (const ids of likerIdsByPost.values()) for (const id of ids) authorIds.add(id)
   for (const ids of goingIdsByPost.values()) for (const id of ids) authorIds.add(id)
   for (const ids of interestedIdsByPost.values()) for (const id of ids) authorIds.add(id)
   const authors = await resolveAuthors(Array.from(authorIds))
@@ -515,6 +581,7 @@ async function annotatePosts(
       },
       likeCount: likeCounts.get(p.id) ?? 0,
       likedByMe: likedByMe.has(p.id),
+      likers: toAuthorList(likerIdsByPost.get(p.id) ?? []),
       commentCount: comments.length,
       comments,
       pollTally: normalizeTally(pollTally.get(p.id) ?? []),
@@ -668,6 +735,8 @@ export async function toggleLike(
   const userId = await getUserId()
   if (!postId) throw new Error('A valid post is required.')
   await ensurePostsTables()
+  // Scoped (group/community) posts require membership; Home posts are unaffected.
+  await assertCanInteract(postId, userId)
 
   const existing = await db
     .select({ id: postLikes.id })
@@ -708,7 +777,16 @@ export async function addComment(
   if (!postId) throw new Error('A valid post is required.')
   const text = body?.trim()
   if (!text) throw new Error('A comment cannot be empty.')
+  // Explicit character cap, validated server-side (never relying on the 1 MB
+  // Server Action body limit) so an oversized comment fails with a clean error.
+  if (text.length > MAX_COMMENT_LENGTH) {
+    throw new Error(
+      `A comment cannot exceed ${MAX_COMMENT_LENGTH.toLocaleString()} characters.`,
+    )
+  }
   await ensurePostsTables()
+  // Scoped (group/community) posts require membership; Home posts are unaffected.
+  await assertCanInteract(postId, authorId)
 
   const rows = await db
     .insert(postComments)
@@ -742,6 +820,8 @@ export async function votePoll(
     throw new Error('A valid poll option is required.')
   }
   await ensurePostsTables()
+  // Scoped (group/community) posts require membership; Home posts are unaffected.
+  await assertCanInteract(postId, userId)
 
   await db
     .insert(pollVotes)

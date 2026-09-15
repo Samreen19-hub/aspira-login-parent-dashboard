@@ -99,6 +99,12 @@ export interface FeedPost {
    */
   likedByMe?: boolean
   /**
+   * Users who liked a DB-backed post, resolved server-side, for the "who liked"
+   * list. Length matches `likes`. Undefined for seed/localStorage posts (their
+   * likes are not individually attributed).
+   */
+  likers?: { id: string; name: string; avatar: string }[]
+  /**
    * The signed-in user's INDEPENDENT RSVP flags for a DB-backed event post,
    * read from the server. Going and Interested are independent entities — a
    * user may be both at once. Undefined for seed/localStorage posts.
