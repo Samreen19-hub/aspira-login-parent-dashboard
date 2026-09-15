@@ -11,7 +11,7 @@ import type { FeedPost } from "@/lib/parent-data"
 import { eventDisplayDate } from "@/lib/parent-data"
 import { useFeedStore, type RsvpFlags } from "@/components/parent/feed-store"
 import { EventRsvpBar } from "@/components/parent/event-rsvp-bar"
-import { toggleLike, addComment as addCommentAction, votePoll } from "@/app/actions/posts"
+import { toggleLike, addComment as addCommentAction, votePoll, MAX_COMMENT_LENGTH } from "@/app/actions/posts"
 
 /**
  * Live RSVP wiring passed to the Home Feed event card. Counts, flags and
@@ -54,6 +54,8 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
   const [pollVotes, setPollVotes] = useState(post.poll?.votes ?? [])
   const [voted, setVoted] = useState<number | null>(post.poll?.voted ?? null)
   const [feedback, setFeedback] = useState("")
+  const [commentError, setCommentError] = useState("")
+  const [likersOpen, setLikersOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -62,6 +64,34 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
     document.addEventListener("mousedown", close)
     return () => document.removeEventListener("mousedown", close)
   }, [menuOpen])
+
+  // Reconcile server-authoritative interaction state when a revalidated feed
+  // delivers fresh props (e.g. ANOTHER user's like or comment). This is what
+  // makes cross-user updates appear: previously these values were copied into
+  // local state once on mount and never refreshed, so other users' likes and
+  // comments stayed stale forever. Only DB-backed posts reconcile — seed/local
+  // posts never change server-side, so their props stay frozen as before. An
+  // in-flight optimistic change does not alter props, so it is never clobbered;
+  // the next background refetch simply confirms the authoritative value.
+  const commentKey = post.comments.map((c) => c.id).join(",")
+  const pollKey = `${(post.poll?.votes ?? []).join(",")}|${post.poll?.voted ?? ""}`
+  useEffect(() => {
+    if (!serverBacked) return
+    setLiked(post.likedByMe ?? false)
+    setLikeCount(post.likes)
+  }, [serverBacked, post.likedByMe, post.likes])
+  useEffect(() => {
+    if (!serverBacked) return
+    setComments(post.comments)
+    // Keyed on comment ids so identical lists don't trigger a needless reset.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverBacked, commentKey])
+  useEffect(() => {
+    if (!serverBacked || !post.poll) return
+    setPollVotes(post.poll.votes)
+    setVoted(post.poll.voted ?? null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverBacked, pollKey])
 
   // Like: optimistic toggle for instant feedback. DB-backed posts persist through
   // toggleLike() (authenticated user, public.post_likes) and reconcile to the
@@ -107,18 +137,29 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
   async function addComment() {
     const body = comment.trim()
     if (!body && !commentImage) return
+    // Client-side length guard mirrors the server cap so an oversized comment is
+    // stopped with a clear message BEFORE it is sent — it can never reach (and
+    // fail against) the Next.js 1 MB Server Action body limit.
+    if (body.length > MAX_COMMENT_LENGTH) {
+      setCommentError(`Comments are limited to ${MAX_COMMENT_LENGTH.toLocaleString()} characters.`)
+      return
+    }
     if (serverBacked) {
       if (!body) return
       try {
         const created = await addCommentAction(post.id, body)
         setComments((prev) => [...prev, { id: created.id, author: created.author.name ?? "Parent", avatar: created.author.avatar ?? "/placeholder.svg", text: created.body, time: "now" }])
-        setComment(""); setCommentImage(undefined)
+        setComment(""); setCommentImage(undefined); setCommentError("")
         setShowComments(true)
-      } catch {}
+      } catch (error) {
+        // Surface the failure instead of silently swallowing it, so a rejected
+        // comment (e.g. non-member, too long) tells the user what happened.
+        setCommentError(error instanceof Error ? error.message : "Your comment could not be posted. Please try again.")
+      }
       return
     }
     setComments((prev) => [...prev, { id: `c-${Date.now()}`, author: "Rashi Kapoor", avatar: "/avatar-rashi.png", text: body, image: commentImage, time: "now" }])
-    setComment(""); setCommentImage(undefined)
+    setComment(""); setCommentImage(undefined); setCommentError("")
     setShowComments(true)
   }
 
@@ -223,7 +264,17 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
                 </Avatar>
               ))}
             </div>
-            <p className="text-sm text-muted-foreground">{post.likedByLabel}</p>
+            {serverBacked && (post.likers?.length ?? 0) > 0 ? (
+              <button
+                type="button"
+                onClick={() => setLikersOpen(true)}
+                className="text-sm text-muted-foreground transition-colors hover:text-brand hover:underline"
+              >
+                {post.likedByLabel}
+              </button>
+            ) : (
+              <p className="text-sm text-muted-foreground">{post.likedByLabel}</p>
+            )}
           </div>
           <button
             type="button"
@@ -257,38 +308,49 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
       </div>
 
       {/* Comment box */}
-      <div className="flex items-center gap-3 border-t border-border p-4">
-        <Avatar className="size-9 shrink-0">
-          <AvatarImage src="/avatar-rashi.png" alt="You" />
-          <AvatarFallback>RK</AvatarFallback>
-        </Avatar>
-        <div className="flex h-11 flex-1 items-center gap-2 rounded-full border border-input bg-secondary/50 pl-4 pr-2">
-          <input
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.nativeEvent.isComposing && e.keyCode !== 229) addComment()
-            }}
-            placeholder="Write a comment..."
-            className="h-full flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-            aria-label="Write a comment"
-          />
-          <div className="flex items-center gap-1 text-muted-foreground">
-            <button type="button" onClick={() => setEmojiOpen((v) => !v)} className="rounded-full p-1.5 hover:bg-secondary" aria-label="Add emoji"><Smile className="size-4" /></button>
-            <label className="rounded-full p-1.5 hover:bg-secondary" aria-label="Add photo"><Camera className="size-4" /><input type="file" accept="image/*" className="sr-only" onChange={(e) => { const file = e.target.files?.[0]; if (file) setCommentImage(URL.createObjectURL(file)) }} /></label>
-            {commentImage && <div className="relative"><Image src={commentImage} alt="Selected comment attachment" width={52} height={52} className="size-13 rounded-lg object-cover" /><button type="button" onClick={() => setCommentImage(undefined)} className="absolute -right-1 -top-1 rounded-full bg-foreground px-1 text-xs text-background" aria-label="Remove selected photo">×</button></div>}
-            <button
-              type="button"
-              onClick={addComment}
-              disabled={!comment.trim() && !commentImage}
-              className="rounded-full p-1.5 text-brand hover:bg-secondary disabled:opacity-40"
-              aria-label="Send comment"
-            >
-              <Send className="size-4" />
-            </button>
+      <div className="border-t border-border p-4">
+        <div className="flex items-center gap-3">
+          <Avatar className="size-9 shrink-0">
+            <AvatarImage src="/avatar-rashi.png" alt="You" />
+            <AvatarFallback>RK</AvatarFallback>
+          </Avatar>
+          <div className="flex h-11 flex-1 items-center gap-2 rounded-full border border-input bg-secondary/50 pl-4 pr-2">
+            <input
+              value={comment}
+              onChange={(e) => { setComment(e.target.value); if (commentError) setCommentError("") }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.nativeEvent.isComposing && e.keyCode !== 229) addComment()
+              }}
+              maxLength={MAX_COMMENT_LENGTH}
+              placeholder="Write a comment..."
+              className="h-full flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              aria-label="Write a comment"
+            />
+            <div className="flex items-center gap-1 text-muted-foreground">
+              <button type="button" onClick={() => setEmojiOpen((v) => !v)} className="rounded-full p-1.5 hover:bg-secondary" aria-label="Add emoji"><Smile className="size-4" /></button>
+              <label className="rounded-full p-1.5 hover:bg-secondary" aria-label="Add photo"><Camera className="size-4" /><input type="file" accept="image/*" className="sr-only" onChange={(e) => { const file = e.target.files?.[0]; if (file) setCommentImage(URL.createObjectURL(file)) }} /></label>
+              {commentImage && <div className="relative"><Image src={commentImage} alt="Selected comment attachment" width={52} height={52} className="size-13 rounded-lg object-cover" /><button type="button" onClick={() => setCommentImage(undefined)} className="absolute -right-1 -top-1 rounded-full bg-foreground px-1 text-xs text-background" aria-label="Remove selected photo">×</button></div>}
+              <button
+                type="button"
+                onClick={addComment}
+                disabled={(!comment.trim() && !commentImage) || comment.length > MAX_COMMENT_LENGTH}
+                className="rounded-full p-1.5 text-brand hover:bg-secondary disabled:opacity-40"
+                aria-label="Send comment"
+              >
+                <Send className="size-4" />
+              </button>
+            </div>
+            {emojiOpen && <div className="absolute z-10 mt-12 rounded-xl border border-border bg-card p-2 shadow-lg"><div className="flex gap-1 text-lg">{["😀", "👏", "🎉", "❤️", "😊", "👍"].map((emoji) => <button type="button" key={emoji} onClick={() => { setComment((value) => `${value}${emoji}`); setEmojiOpen(false) }} className="rounded-lg p-1 hover:bg-secondary">{emoji}</button>)}</div></div>}
           </div>
-          {emojiOpen && <div className="absolute z-10 mt-12 rounded-xl border border-border bg-card p-2 shadow-lg"><div className="flex gap-1 text-lg">{["😀", "👏", "🎉", "❤️", "😊", "👍"].map((emoji) => <button type="button" key={emoji} onClick={() => { setComment((value) => `${value}${emoji}`); setEmojiOpen(false) }} className="rounded-lg p-1 hover:bg-secondary">{emoji}</button>)}</div></div>}
         </div>
+        {(commentError || comment.length > MAX_COMMENT_LENGTH - 200) && (
+          <div className="mt-2 flex items-center justify-between gap-3 pl-12 text-xs">
+            <span className="text-destructive" role={commentError ? "alert" : undefined}>{commentError}</span>
+            <span className={comment.length > MAX_COMMENT_LENGTH ? "text-destructive" : "text-muted-foreground"}>
+              {comment.length.toLocaleString()}/{MAX_COMMENT_LENGTH.toLocaleString()}
+            </span>
+          </div>
+        )}
       </div>
       <Dialog open={shareOpen} onOpenChange={setShareOpen}><DialogContent><DialogHeader><DialogTitle>Share post</DialogTitle><DialogDescription>Choose how you would like to share this update.</DialogDescription></DialogHeader><div className="grid gap-2"><Button variant="outline" className="justify-start gap-2" onClick={async () => { try { await navigator.clipboard.writeText(`${window.location.origin}/parent/posts/${post.id}`) } catch {} setCopied(true); setTimeout(() => setCopied(false), 1800) }}><Copy className="size-4" />{copied ? "Link copied!" : "Copy Link"}</Button><Button variant="outline" className="justify-start gap-2"><Users className="size-4" />Share to Network</Button><Button variant="outline" className="justify-start gap-2"><MessageSquare className="size-4" />Share via Message</Button></div><DialogFooter><Button variant="outline" onClick={() => setShareOpen(false)}>Done</Button></DialogFooter></DialogContent></Dialog>
     </article>
