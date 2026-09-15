@@ -243,11 +243,28 @@ async function addMembership(slug: string, role: SpaceRole): Promise<void> {
   const meId = await getUserId()
   if (!slug) throw new Error('A valid space is required.')
   await ensureSpaceMembersTable()
+  await ensureSpaceInvitationsTable()
 
   await db
     .insert(spaceMembers)
     .values({ slug, userId: meId, role })
     .onConflictDoNothing()
+
+  // The user is now a real member because they joined/followed independently, so
+  // any still-`pending` invitation for them to this space must stop being
+  // pending. It is marked `cancelled` (NOT `accepted`) because they never
+  // accepted it — membership arose on its own. History is preserved and the
+  // member count (which reads only `space_members`) is unaffected.
+  await db
+    .update(spaceInvitations)
+    .set({ status: 'cancelled', respondedAt: new Date() })
+    .where(
+      and(
+        eq(spaceInvitations.spaceSlug, slug),
+        eq(spaceInvitations.inviteeId, meId),
+        eq(spaceInvitations.status, 'pending'),
+      ),
+    )
 }
 
 /** Group membership: the signed-in user joins `slug` as a member. */
@@ -500,6 +517,41 @@ export async function getInviteableSpaceUsers(
 }
 
 /**
+ * Real users who can be invited while CREATING a new space — before the space
+ * exists in `public.space_members`, so there is no membership to check yet.
+ * Sourced from `neon_auth.user` joined to `public.profiles` (never a static or
+ * dummy contact list) and excludes only the signed-in creator. Powers the invite
+ * picker in the Create Group/Community dialog. Avatars fall back to the Better
+ * Auth image; the UI falls back to initials when both are null.
+ */
+export async function getInviteableUsers(): Promise<InviteableUser[]> {
+  const meId = await getUserId()
+
+  const rows = await db
+    .select({
+      userId: user.id,
+      userName: user.name,
+      profileName: profiles.name,
+      profileSlug: profiles.slug,
+      avatar: profiles.avatar,
+      headline: profiles.headline,
+      image: user.image,
+    })
+    .from(user)
+    .leftJoin(profiles, eq(profiles.userId, user.id))
+    .where(ne(user.id, meId))
+    .orderBy(user.name)
+
+  return rows.map((r) => ({
+    userId: r.userId,
+    name: r.profileName ?? r.userName ?? 'Aspira member',
+    slug: r.profileSlug ?? null,
+    avatar: r.avatar ?? r.image ?? null,
+    headline: r.headline ?? null,
+  }))
+}
+
+/**
  * The active (`pending`) invitations for `slug`, projected with the invitee's
  * identity, newest first. Restricted to members (via `assertCanInvite`) — the
  * same audience that sees the roster. Drives the "Invited" state/badges,
@@ -513,6 +565,16 @@ export async function getPendingSpaceInvitations(
   await ensureSpaceMembersTable()
   await ensureSpaceInvitationsTable()
   await assertCanInvite(slug, meId)
+
+  // Anyone who is already a real member of this space must NEVER appear as
+  // "invited" — membership always wins over a lingering pending row. We exclude
+  // them in the query (and `addMembership` also cancels their invite on join),
+  // so the invited list and the membership roster can never overlap.
+  const memberRows = await db
+    .select({ userId: spaceMembers.userId })
+    .from(spaceMembers)
+    .where(eq(spaceMembers.slug, slug))
+  const memberIds = memberRows.map((r) => r.userId)
 
   const rows = await db
     .select({
@@ -533,6 +595,9 @@ export async function getPendingSpaceInvitations(
       and(
         eq(spaceInvitations.spaceSlug, slug),
         eq(spaceInvitations.status, 'pending'),
+        memberIds.length > 0
+          ? notInArray(spaceInvitations.inviteeId, memberIds)
+          : undefined,
       ),
     )
     .orderBy(spaceInvitations.createdAt)
