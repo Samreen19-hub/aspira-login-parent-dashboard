@@ -296,16 +296,16 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
           <ul className="mt-3 space-y-3">
             {comments.map((c) => (
               <li key={c.id} className="flex items-start gap-2">
-                <Avatar className="size-8">
+                <Avatar className="size-8 shrink-0">
                   <AvatarImage src={c.avatar || "/placeholder.svg"} alt={c.author} />
                   <AvatarFallback>{initialsOf(c.author)}</AvatarFallback>
                 </Avatar>
-                <div className="rounded-2xl bg-secondary/70 px-3 py-2">
+                <div className="min-w-0 max-w-full rounded-2xl bg-secondary/70 px-3 py-2">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-foreground">{c.author}</span>
                     <span className="text-xs text-muted-foreground">{c.time}</span>
                   </div>
-                  {c.text && <p className="text-sm text-foreground">{c.text}</p>}
+                  {c.text && <p className="text-sm text-foreground break-words [overflow-wrap:anywhere]">{c.text}</p>}
                   {c.image && <Image src={c.image} alt="Comment attachment" width={180} height={120} className="mt-2 rounded-lg object-cover" />}
                 </div>
               </li>
