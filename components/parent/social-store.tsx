@@ -34,7 +34,8 @@ type SocialState = {
   toggleJoined: (slug: string) => Promise<string | null>
   /** Follow/unfollow a community. Communities are unrestricted, so this resolves to null. */
   toggleFollowing: (slug: string) => Promise<string | null>
-  addSpace: (space: SocialSpace) => Promise<void>
+  /** Creates a space server-side and returns its final (guaranteed-unique) slug, or null if it failed. */
+  addSpace: (space: SocialSpace) => Promise<string | null>
   removeSpace: (slug: string) => Promise<void>
   getSpace: (slug: string) => SocialSpace | undefined
   /** Revalidate the signed-in user's memberships (call after a roster mutation). */
@@ -96,8 +97,13 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
       // taken from the session), then revalidate spaces + memberships so the new
       // space is immediately resolvable (e.g. by the detail page we navigate to).
       addSpace: async (space: SocialSpace) => {
+        // createSpace assigns the FINAL, guaranteed-unique slug server-side (it
+        // may differ from the requested one on collision) and returns it, so the
+        // caller can navigate to / invite against the slug that was actually
+        // created rather than the optimistic client guess.
+        let created: string | null = null
         try {
-          await createSpace({
+          created = await createSpace({
             slug: space.slug,
             kind: space.kind,
             title: space.title,
@@ -110,6 +116,7 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
           })
         } catch {}
         await Promise.all([mutateSpaces(), mutate()])
+        return created
       },
       // Admin-only delete: remove the space definition + every membership row
       // (enforced server-side), then revalidate both lists.

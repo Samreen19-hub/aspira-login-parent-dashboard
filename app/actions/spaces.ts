@@ -1050,6 +1050,44 @@ export async function getInviteableUsers(): Promise<InviteableUser[]> {
 }
 
 /**
+ * Real users the signed-in user may invite while creating an INVITE-ONLY group:
+ * EXACTLY their accepted connections (see `acceptedConnectionIds`), never the
+ * full user directory. This keeps an invite-only group's seed invitations in
+ * lock-step with its join rule — only people the creator is actually connected
+ * to can be invited — so the group can never be pre-populated with strangers.
+ * Communities use `getInviteableUsers` instead (their invitations are an
+ * optional sharing feature and never gate access).
+ */
+export async function getConnectionInviteableUsers(): Promise<InviteableUser[]> {
+  const meId = await getUserId()
+  const connectionIds = await acceptedConnectionIds(meId)
+  if (connectionIds.size === 0) return []
+
+  const rows = await db
+    .select({
+      userId: user.id,
+      userName: user.name,
+      profileName: profiles.name,
+      profileSlug: profiles.slug,
+      avatar: profiles.avatar,
+      headline: profiles.headline,
+      image: user.image,
+    })
+    .from(user)
+    .leftJoin(profiles, eq(profiles.userId, user.id))
+    .where(inArray(user.id, [...connectionIds]))
+    .orderBy(user.name)
+
+  return rows.map((r) => ({
+    userId: r.userId,
+    name: r.profileName ?? r.userName ?? 'Aspira member',
+    slug: r.profileSlug ?? null,
+    avatar: r.avatar ?? r.image ?? null,
+    headline: r.headline ?? null,
+  }))
+}
+
+/**
  * The active (`pending`) invitations for `slug`, projected with the invitee's
  * identity, newest first. Restricted to members (via `assertCanInvite`) — the
  * same audience that sees the roster. Drives the "Invited" state/badges,
