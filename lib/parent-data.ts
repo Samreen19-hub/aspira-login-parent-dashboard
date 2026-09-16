@@ -137,6 +137,12 @@ export interface SocialSpace {
   tone: string
   initials: string
   privacy: 'Public' | 'Private'
+  /**
+   * GROUP-only access control (who may join): `anyone | connections | invite`.
+   * Communities are always public and use Follow, so they ignore this. Optional
+   * for backward compatibility; treated as `anyone` when absent.
+   */
+  joinPolicy?: 'anyone' | 'connections' | 'invite'
   memberNames: string[]
 }
 
@@ -301,6 +307,7 @@ export const SOCIAL_SPACES: SocialSpace[] = [
     tone: 'bg-violet-100 text-violet-700',
     initials: 'C6',
     privacy: 'Private',
+    joinPolicy: 'anyone',
     memberNames: ['Rashi Kapoor', 'Priya Sharma', 'Kabir Mehta', 'Neha Sharma', 'Amit Verma', 'Divya Rao'],
   },
   {
@@ -313,6 +320,7 @@ export const SOCIAL_SPACES: SocialSpace[] = [
     tone: 'bg-blue-100 text-blue-700',
     initials: 'GS',
     privacy: 'Public',
+    joinPolicy: 'anyone',
     memberNames: ['Rashi Kapoor', 'Arjun Nair', 'Meera Iyer', 'Sanjay Gupta', 'Farah Khan'],
   },
   {
@@ -325,6 +333,7 @@ export const SOCIAL_SPACES: SocialSpace[] = [
     tone: 'bg-amber-100 text-amber-700',
     initials: 'RP',
     privacy: 'Private',
+    joinPolicy: 'anyone',
     memberNames: ['Rashi Kapoor', 'Vikram Desai', 'Anita Menon', 'Rohan Bose'],
   },
   {
@@ -337,6 +346,7 @@ export const SOCIAL_SPACES: SocialSpace[] = [
     tone: 'bg-emerald-100 text-emerald-700',
     initials: 'WL',
     privacy: 'Public',
+    joinPolicy: 'anyone',
     memberNames: ['Rashi Kapoor', 'Shalini Rao', 'Imran Sheikh', 'Deepa Nair'],
   },
   {

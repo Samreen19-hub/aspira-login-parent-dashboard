@@ -99,13 +99,15 @@ function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpen
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [category, setCategory] = useState(categories[0])
-  const [privacy, setPrivacy] = useState<"Public" | "Private">(isGroups ? "Private" : "Public")
+  // GROUPS choose who may join via a join policy. COMMUNITIES are always public
+  // (Follow), so they have no selector and this state is simply ignored for them.
+  const [joinPolicy, setJoinPolicy] = useState<"anyone" | "connections" | "invite">("anyone")
   const [invitees, setInvitees] = useState<string[]>([])
   // Real users to invite, from the DB (neon_auth.user + profiles) — never the old
   // dummy INVITE_CONTACTS list. Loaded only while the dialog is open.
   const { data: people } = useSWR(open ? "invite-users" : null, getInviteableUsers, { revalidateOnFocus: false })
 
-  function reset() { setName(""); setDescription(""); setCategory(categories[0]); setPrivacy(isGroups ? "Private" : "Public"); setInvitees([]) }
+  function reset() { setName(""); setDescription(""); setCategory(categories[0]); setJoinPolicy("anyone"); setInvitees([]) }
   function toggleInvitee(id: string) { setInvitees((current) => (current.includes(id) ? current.filter((value) => value !== id) : [...current, id])) }
   async function create() {
     const trimmed = name.trim()
@@ -123,7 +125,11 @@ function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpen
       members: 0,
       tone: "bg-violet-100 text-violet-700",
       initials: initialsOf(trimmed),
-      privacy,
+      // Groups are always stored Public now (access is governed by joinPolicy);
+      // communities are inherently public too.
+      privacy: "Public",
+      // Group access control; communities always resolve to `anyone` (Follow).
+      joinPolicy: isGroups ? joinPolicy : "anyone",
       // Selected invitees are NOT members — they become real pending rows in
       // space_invitations below, so no dummy names are stored here.
       memberNames: [],
@@ -150,7 +156,7 @@ function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpen
           <div className="grid gap-2"><Label htmlFor="space-name">{isGroups ? "Group" : "Community"} name</Label><Input id="space-name" value={name} onChange={(event) => setName(event.target.value)} placeholder={isGroups ? "e.g. Class 6 Parents" : "e.g. Young Scientists"} /></div>
           <div className="grid gap-2"><Label htmlFor="space-desc">Description</Label><Textarea id="space-desc" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What is this space about?" /></div>
           <div className="grid gap-2"><Label>Category</Label><div className="flex flex-wrap gap-2">{categories.map((option) => <Button key={option} type="button" size="sm" variant={category === option ? "default" : "outline"} className="rounded-xl" onClick={() => setCategory(option)}>{option}</Button>)}</div></div>
-          <div className="grid gap-2"><Label>Privacy</Label><div className="flex flex-wrap gap-2">{(["Public", "Private"] as const).map((option) => <Button key={option} type="button" size="sm" variant={privacy === option ? "default" : "outline"} className="rounded-xl" onClick={() => setPrivacy(option)}>{option}</Button>)}</div></div>
+          {isGroups && <div className="grid gap-2"><Label>Who can join</Label><div className="flex flex-wrap gap-2">{([["anyone", "Anyone"], ["connections", "My connections"], ["invite", "Invite only"]] as const).map(([value, label]) => <Button key={value} type="button" size="sm" variant={joinPolicy === value ? "default" : "outline"} className="rounded-xl" onClick={() => setJoinPolicy(value)}>{label}</Button>)}</div><p className="text-xs text-muted-foreground">{joinPolicy === "anyone" ? "Any parent can find and join this group." : joinPolicy === "connections" ? "Only your accepted connections can join this group." : "Only people you invite can join this group."}</p></div>}
           <div className="grid gap-2"><Label>Invite members <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label><ul className="max-h-40 space-y-1 overflow-y-auto rounded-xl border border-border p-1">{people === undefined ? <li className="p-3 text-sm text-muted-foreground">Loading members…</li> : people.length === 0 ? <li className="p-3 text-sm text-muted-foreground">No other members to invite yet.</li> : people.map((person) => { const selected = invitees.includes(person.userId); return <li key={person.userId}><button type="button" onClick={() => toggleInvitee(person.userId)} className="flex w-full items-center gap-3 rounded-lg p-2 text-left hover:bg-secondary"><Avatar className="size-8"><AvatarImage src={person.avatar || "/placeholder.svg"} alt={person.name} /><AvatarFallback>{initialsOf(person.name)}</AvatarFallback></Avatar><span className="min-w-0 flex-1 truncate text-sm font-medium">{person.name}</span><span className={`grid size-5 place-items-center rounded-full border ${selected ? "border-brand bg-brand text-brand-foreground" : "border-input"}`}>{selected && <Check className="size-3.5" />}</span></button></li> })}</ul></div>
         </div>
         <DialogFooter>

@@ -285,6 +285,15 @@ export const spaces = pgTable('spaces', {
   category: text('category'),
   description: text('description'),
   privacy: text('privacy').notNull().default('Public'),
+  /**
+   * GROUP-only access control: who may join a group. One of
+   * `anyone | connections | invite`. Communities ignore this (they are always
+   * public and use Follow), so their value is irrelevant and defaults to
+   * `anyone`. Added lazily by `ensureSpacesTable` with a backward-compatible
+   * DEFAULT so every existing space (built-in or user-created) keeps the prior
+   * unrestricted "anyone can join" semantics — no existing member is affected.
+   */
+  joinPolicy: text('join_policy').notNull().default('anyone'),
   createdBy: uuid('created_by'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
