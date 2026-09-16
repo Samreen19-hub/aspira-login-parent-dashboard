@@ -393,7 +393,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
                       {isRowAdmin ? (
                         <Badge variant="secondary" className="gap-1 bg-brand text-brand-foreground"><ShieldCheck className="size-3" />Admin</Badge>
                       ) : (
-                        <span className="text-xs text-muted-foreground">Member</span>
+                        <span className="text-xs text-muted-foreground">{isGroup ? "Member" : "Follower"}</span>
                       )}
                       {isSelf && <Badge variant="secondary">You</Badge>}
                     </div>
