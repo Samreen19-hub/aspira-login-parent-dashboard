@@ -410,6 +410,14 @@ export function ensureSpacesTable(): Promise<void> {
           updated_at timestamptz NOT NULL DEFAULT now()
         )
       `)
+      // Additive, backward-compatible GROUP access-control column. The DEFAULT
+      // ensures every pre-existing space row (built-in or user-created) inherits
+      // the prior unrestricted "anyone can join" behavior, so no current member
+      // is ever locked out by this migration. Communities ignore this value.
+      await pool.query(`
+        ALTER TABLE public.spaces
+        ADD COLUMN IF NOT EXISTS join_policy text NOT NULL DEFAULT 'anyone'
+      `)
       // One space per slug -> seeding/creating is idempotent and every posts,
       // membership, and invitation row keyed by slug resolves to exactly one
       // space definition.

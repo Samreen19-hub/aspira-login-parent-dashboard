@@ -1,6 +1,6 @@
 'use server'
 
-import { and, eq, inArray, ne, notInArray, sql } from 'drizzle-orm'
+import { and, eq, inArray, ne, notInArray, or, sql } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { auth } from '@/lib/auth'
 import {
@@ -10,6 +10,7 @@ import {
   ensureSpacesTable,
 } from '@/lib/db'
 import {
+  connections,
   profiles,
   spaceInvitations,
   spaceMembers,
@@ -20,6 +21,20 @@ import { SOCIAL_SPACES, type SocialSpace } from '@/lib/parent-data'
 
 /** A member's role within a space. Admins can invite, remove, and delete. */
 export type SpaceRole = 'member' | 'admin'
+
+/**
+ * GROUP-only access control. Decides who may JOIN a group:
+ *   - `anyone`      — any signed-in user can join directly.
+ *   - `connections` — only an accepted connection of the group creator/admin.
+ *   - `invite`      — no direct joining; a valid invitation is required.
+ * Communities always ignore this (they are public and use Follow).
+ */
+export type JoinPolicy = 'anyone' | 'connections' | 'invite'
+
+/** Coerces any stored/among-input value to a valid JoinPolicy (defaults to `anyone`). */
+function normalizeJoinPolicy(value: string | null | undefined): JoinPolicy {
+  return value === 'connections' || value === 'invite' ? value : 'anyone'
+}
 
 // ---------------------------------------------------------------------------
 // Space DEFINITIONS — DB-backed existence & metadata (public.spaces).
@@ -81,6 +96,9 @@ function seedBuiltInSpaces(): Promise<void> {
             category: space.category,
             description: space.description,
             privacy: space.privacy,
+            // Built-ins keep the unrestricted default so anyone can still join
+            // them exactly as before this change.
+            joinPolicy: space.kind === 'groups' ? normalizeJoinPolicy(space.joinPolicy) : 'anyone',
             createdBy: null,
           })),
         )
@@ -97,9 +115,10 @@ function seedBuiltInSpaces(): Promise<void> {
 /** Projects a `public.spaces` row into the UI's `SocialSpace` shape. */
 function toSocialSpace(row: typeof spacesTable.$inferSelect): SocialSpace {
   const builtIn = BUILT_IN_BY_SLUG.get(row.slug)
+  const kind = kindFromDb(row.kind)
   return {
     slug: row.slug,
-    kind: kindFromDb(row.kind),
+    kind,
     title: row.title,
     description: row.description ?? '',
     category: row.category ?? '',
@@ -110,7 +129,12 @@ function toSocialSpace(row: typeof spacesTable.$inferSelect): SocialSpace {
     // user-created spaces derive the same defaults the old create flow used.
     tone: builtIn?.tone ?? DEFAULT_SPACE_TONE,
     initials: builtIn?.initials ?? initialsOf(row.title),
-    privacy: row.privacy === 'Private' ? 'Private' : 'Public',
+    // Communities are ALWAYS public regardless of any legacy stored value, so a
+    // private/public selector can never apply to them. Groups keep their stored
+    // privacy (unused for gating now, but preserved for compatibility).
+    privacy: kind === 'communities' ? 'Public' : row.privacy === 'Private' ? 'Private' : 'Public',
+    // Group-only access control; communities normalize to `anyone` (unused).
+    joinPolicy: kind === 'communities' ? 'anyone' : normalizeJoinPolicy(row.joinPolicy),
     memberNames: builtIn?.memberNames ?? [],
   }
 }
@@ -135,7 +159,11 @@ export type CreateSpaceInput = {
   title: string
   description: string
   category: string
-  privacy: 'Public' | 'Private'
+  /**
+   * GROUP access control (who can join). Ignored for communities, which are
+   * always public. Optional so a community create call may omit it.
+   */
+  joinPolicy?: JoinPolicy
 }
 
 /**
@@ -366,8 +394,97 @@ async function addMembership(slug: string, role: SpaceRole): Promise<void> {
     )
 }
 
-/** Group membership: the signed-in user joins `slug` as a member. */
+/**
+ * True when `meId` and any user in `targetIds` share an ACCEPTED connection
+ * (in either direction). Used to enforce a group's `connections` join policy.
+ */
+async function hasAcceptedConnectionWithAny(meId: string, targetIds: string[]): Promise<boolean> {
+  const others = targetIds.filter((id) => id && id !== meId)
+  if (others.length === 0) return false
+  const rows = await db
+    .select({ id: connections.id })
+    .from(connections)
+    .where(
+      and(
+        eq(connections.status, 'accepted'),
+        or(
+          and(eq(connections.requesterId, meId), inArray(connections.recipientId, others)),
+          and(eq(connections.recipientId, meId), inArray(connections.requesterId, others)),
+        ),
+      ),
+    )
+    .limit(1)
+  return rows.length > 0
+}
+
+/**
+ * Group membership: the signed-in user joins `slug` as a member, subject to the
+ * group's `join_policy`:
+ *   - `anyone`      — always allowed.
+ *   - `connections` — allowed only for an accepted connection of the group
+ *                     creator or one of its admins.
+ *   - `invite`      — allowed only when a valid (pending) invitation exists for
+ *                     this user; there is no other way in.
+ * Enforcement lives here (server-side) so direct navigation, the listing card,
+ * and the detail page all obey the same rule. Communities skip all of this —
+ * they are always public and use Follow. Already-members re-join as a no-op.
+ */
 export async function joinSpace(slug: string): Promise<void> {
+  const meId = await getUserId()
+  if (!slug) throw new Error('A valid space is required.')
+  await ensureSpacesTable()
+  await ensureSpaceMembersTable()
+  await ensureSpaceInvitationsTable()
+
+  const [space] = await db
+    .select({ kind: spacesTable.kind, createdBy: spacesTable.createdBy, joinPolicy: spacesTable.joinPolicy })
+    .from(spacesTable)
+    .where(eq(spacesTable.slug, slug))
+    .limit(1)
+
+  const policy = normalizeJoinPolicy(space?.joinPolicy)
+  // Access control applies only to groups with a restrictive policy. Communities
+  // (Follow) and `anyone` groups fall straight through to addMembership.
+  if (space && space.kind === 'group' && policy !== 'anyone') {
+    const existing = await db
+      .select({ userId: spaceMembers.userId })
+      .from(spaceMembers)
+      .where(and(eq(spaceMembers.slug, slug), eq(spaceMembers.userId, meId)))
+      .limit(1)
+    // Idempotent for someone who is somehow already a member — never lock out an
+    // existing member on a repeat action.
+    if (existing.length === 0) {
+      if (policy === 'connections') {
+        // Owner + current admins are the people a joiner must be connected to.
+        const adminRows = await db
+          .select({ userId: spaceMembers.userId })
+          .from(spaceMembers)
+          .where(and(eq(spaceMembers.slug, slug), eq(spaceMembers.role, 'admin')))
+        const targets = new Set(adminRows.map((row) => row.userId))
+        if (space.createdBy) targets.add(space.createdBy)
+        const allowed = await hasAcceptedConnectionWithAny(meId, [...targets])
+        if (!allowed) {
+          throw new Error('This group is limited to connections of the group creator. Connect with them first to join.')
+        }
+      } else if (policy === 'invite') {
+        const invite = await db
+          .select({ id: spaceInvitations.id })
+          .from(spaceInvitations)
+          .where(
+            and(
+              eq(spaceInvitations.spaceSlug, slug),
+              eq(spaceInvitations.inviteeId, meId),
+              eq(spaceInvitations.status, 'pending'),
+            ),
+          )
+          .limit(1)
+        if (invite.length === 0) {
+          throw new Error('This group is invite only. Ask a group admin for an invitation to join.')
+        }
+      }
+    }
+  }
+
   await addMembership(slug, 'member')
 }
 
@@ -401,7 +518,12 @@ export async function createSpace(input: CreateSpaceInput): Promise<void> {
       title,
       category: input.category,
       description: input.description,
-      privacy: input.privacy === 'Private' ? 'Private' : 'Public',
+      // Communities are always public; groups no longer expose a public/private
+      // selector, so every new space stores privacy 'Public'. Group access is
+      // governed entirely by join_policy below.
+      privacy: 'Public',
+      // Group access control. Communities always use `anyone` (public + Follow).
+      joinPolicy: input.kind === 'groups' ? normalizeJoinPolicy(input.joinPolicy) : 'anyone',
       createdBy: meId,
     })
     .onConflictDoNothing({ target: spacesTable.slug })

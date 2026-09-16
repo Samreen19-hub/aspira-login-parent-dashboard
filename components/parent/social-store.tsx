@@ -84,6 +84,7 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
             description: space.description,
             category: space.category,
             privacy: space.privacy,
+            joinPolicy: space.joinPolicy,
           })
         } catch {}
         await Promise.all([mutateSpaces(), mutate()])
