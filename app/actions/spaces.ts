@@ -1,6 +1,6 @@
 'use server'
 
-import { and, eq, inArray, ne, notInArray, or, sql } from 'drizzle-orm'
+import { and, eq, ilike, inArray, ne, notInArray, or, sql } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { auth } from '@/lib/auth'
 import {
@@ -140,16 +140,247 @@ function toSocialSpace(row: typeof spacesTable.$inferSelect): SocialSpace {
 }
 
 /**
- * Every Group/Community that EXISTS, read from `public.spaces` (never from a
- * hardcoded array or localStorage). Seeds the built-in spaces on first call so a
- * fresh database is fully populated. No auth requirement: listing space names is
- * public browse information, matching the existing public read-only behavior —
- * membership/roster/feed access is still gated separately.
+ * The set of user ids the signed-in user shares an ACCEPTED connection with
+ * (either direction), never including themselves. This is the single source of
+ * truth for every "connections only" rule: the group `connections` join policy,
+ * the create-time invite picker, and the space invite picker all restrict to
+ * exactly these people.
+ */
+async function acceptedConnectionIds(meId: string): Promise<Set<string>> {
+  const rows = await db
+    .select({
+      requesterId: connections.requesterId,
+      recipientId: connections.recipientId,
+    })
+    .from(connections)
+    .where(
+      and(
+        eq(connections.status, 'accepted'),
+        or(
+          eq(connections.requesterId, meId),
+          eq(connections.recipientId, meId),
+        ),
+      ),
+    )
+  const set = new Set<string>()
+  for (const row of rows) {
+    set.add(row.requesterId === meId ? row.recipientId : row.requesterId)
+  }
+  set.delete(meId)
+  return set
+}
+
+/**
+ * The GROUP slugs the signed-in user is currently eligible to DISCOVER (and
+ * therefore attempt to join). "All" in the Groups UI means exactly this set —
+ * NOT every group in the database. Mirrors the server-side join rules in
+ * `joinSpace` so a group can never be discovered by someone who could not join
+ * it:
+ *   - `anyone`      — every authenticated user.
+ *   - `connections` — only accepted connections of the group creator or one of
+ *                     its admins.
+ *   - `invite`      — only users who already have a valid pending invitation.
+ * Existing members are ALWAYS eligible for their own groups regardless of
+ * policy, so no current member is ever hidden from themselves. Communities are
+ * public and never use this. Filtering happens on the slug set (server-side),
+ * not by hiding the Join button, so an ineligible group is truly invisible.
+ */
+async function eligibleGroupSlugs(meId: string): Promise<Set<string>> {
+  await ensureSpacesTable()
+  await ensureSpaceMembersTable()
+  await ensureSpaceInvitationsTable()
+
+  const groupRows = await db
+    .select({
+      slug: spacesTable.slug,
+      joinPolicy: spacesTable.joinPolicy,
+      createdBy: spacesTable.createdBy,
+    })
+    .from(spacesTable)
+    .where(eq(spacesTable.kind, 'group'))
+
+  const memberRows = await db
+    .select({ slug: spaceMembers.slug })
+    .from(spaceMembers)
+    .where(eq(spaceMembers.userId, meId))
+  const memberSet = new Set(memberRows.map((r) => r.slug))
+
+  const inviteRows = await db
+    .select({ slug: spaceInvitations.spaceSlug })
+    .from(spaceInvitations)
+    .where(
+      and(
+        eq(spaceInvitations.inviteeId, meId),
+        eq(spaceInvitations.status, 'pending'),
+      ),
+    )
+  const inviteSet = new Set(inviteRows.map((r) => r.slug))
+
+  const connSet = await acceptedConnectionIds(meId)
+
+  // For `connections` groups, the valid people to be connected to are the
+  // creator + current admins (identical to joinSpace's check), so discovery and
+  // joinability stay in lock-step. Load those admins in one query.
+  const connGroupSlugs = groupRows
+    .filter((g) => normalizeJoinPolicy(g.joinPolicy) === 'connections')
+    .map((g) => g.slug)
+  const adminsBySlug = new Map<string, Set<string>>()
+  if (connGroupSlugs.length > 0) {
+    const adminRows = await db
+      .select({ slug: spaceMembers.slug, userId: spaceMembers.userId })
+      .from(spaceMembers)
+      .where(
+        and(
+          inArray(spaceMembers.slug, connGroupSlugs),
+          eq(spaceMembers.role, 'admin'),
+        ),
+      )
+    for (const row of adminRows) {
+      const set = adminsBySlug.get(row.slug) ?? new Set<string>()
+      set.add(row.userId)
+      adminsBySlug.set(row.slug, set)
+    }
+  }
+
+  const eligible = new Set<string>()
+  for (const g of groupRows) {
+    if (memberSet.has(g.slug)) {
+      eligible.add(g.slug)
+      continue
+    }
+    const policy = normalizeJoinPolicy(g.joinPolicy)
+    if (policy === 'anyone') {
+      eligible.add(g.slug)
+      continue
+    }
+    if (policy === 'connections') {
+      const targets = new Set(adminsBySlug.get(g.slug) ?? [])
+      if (g.createdBy) targets.add(g.createdBy)
+      for (const target of targets) {
+        if (connSet.has(target)) {
+          eligible.add(g.slug)
+          break
+        }
+      }
+      continue
+    }
+    if (policy === 'invite' && inviteSet.has(g.slug)) {
+      eligible.add(g.slug)
+    }
+  }
+  return eligible
+}
+
+/**
+ * Every space the signed-in user may SEE, read from `public.spaces` (never from
+ * a hardcoded array or localStorage). Communities are always public and always
+ * included. Groups are filtered to the user's eligible set (see
+ * `eligibleGroupSlugs`) so an invite-only or connections-only group is never
+ * exposed to someone who could not join it — this is the same list the detail
+ * page resolves against, so direct navigation to an ineligible group also fails
+ * closed. Seeds the built-in spaces on first call.
  */
 export async function listSpaces(): Promise<SocialSpace[]> {
+  const meId = await getUserId()
   await seedBuiltInSpaces()
   const rows = await db.select().from(spacesTable)
-  return rows.map(toSocialSpace)
+  const eligible = await eligibleGroupSlugs(meId)
+  return rows
+    .filter((row) => (row.kind === 'community' ? true : eligible.has(row.slug)))
+    .map(toSocialSpace)
+}
+
+/** Scope for a paginated listing: everything eligible, or only the user's own. */
+export type SpaceScope = 'all' | 'mine'
+
+/** Input for a single page of the Groups/Communities listing. */
+export type ListSpacesPageInput = {
+  kind: 'groups' | 'communities'
+  /** `all` = eligible discovery; `mine` = joined groups / followed communities. */
+  scope: SpaceScope
+  /** Category chip (`All` or empty means no category filter). */
+  category?: string
+  /** Free-text search across title/description/category. */
+  search?: string
+  limit: number
+  offset: number
+}
+
+/**
+ * ONE page of the Groups/Communities listing, resolved and paginated in the DB
+ * (limit/offset) so the browser never loads an unbounded number of spaces. The
+ * slug universe is decided server-side by scope + eligibility:
+ *   - Groups `all`  — the eligible discovery set (`eligibleGroupSlugs`).
+ *   - Groups `mine` — groups the user has joined.
+ *   - Communities `all`  — every public community (communities are always public).
+ *   - Communities `mine` — communities the user follows.
+ * Category/search are applied as SQL predicates, and `limit + 1` is fetched to
+ * report `hasMore` without a second count query.
+ */
+export async function listSpacesPage(
+  input: ListSpacesPageInput,
+): Promise<{ items: SocialSpace[]; hasMore: boolean }> {
+  const meId = await getUserId()
+  await seedBuiltInSpaces()
+  const dbKind = kindToDb(input.kind)
+  const limit = Math.max(1, Math.min(input.limit || 12, 60))
+  const offset = Math.max(0, input.offset || 0)
+
+  // Decide which slugs are in-scope. `null` means "no slug restriction" (all
+  // public communities); otherwise only slugs in the set are eligible.
+  let slugUniverse: Set<string> | null = null
+  if (input.kind === 'groups') {
+    if (input.scope === 'mine') {
+      const rows = await db
+        .select({ slug: spaceMembers.slug })
+        .from(spaceMembers)
+        .where(eq(spaceMembers.userId, meId))
+      slugUniverse = new Set(rows.map((r) => r.slug))
+    } else {
+      slugUniverse = await eligibleGroupSlugs(meId)
+    }
+  } else if (input.scope === 'mine') {
+    // Communities `mine` == the communities the user follows.
+    const rows = await db
+      .select({ slug: spaceMembers.slug })
+      .from(spaceMembers)
+      .where(eq(spaceMembers.userId, meId))
+    slugUniverse = new Set(rows.map((r) => r.slug))
+  }
+
+  if (slugUniverse && slugUniverse.size === 0) {
+    return { items: [], hasMore: false }
+  }
+
+  const conditions = [eq(spacesTable.kind, dbKind)]
+  if (slugUniverse) conditions.push(inArray(spacesTable.slug, [...slugUniverse]))
+  const category = input.category?.trim()
+  if (category && category !== 'All') {
+    conditions.push(eq(spacesTable.category, category))
+  }
+  const search = input.search?.trim()
+  if (search) {
+    const like = `%${search}%`
+    conditions.push(
+      or(
+        ilike(spacesTable.title, like),
+        ilike(spacesTable.description, like),
+        ilike(spacesTable.category, like),
+      )!,
+    )
+  }
+
+  const rows = await db
+    .select()
+    .from(spacesTable)
+    .where(and(...conditions))
+    .orderBy(spacesTable.title)
+    .limit(limit + 1)
+    .offset(offset)
+
+  const hasMore = rows.length > limit
+  const items = (hasMore ? rows.slice(0, limit) : rows).map(toSocialSpace)
+  return { items, hasMore }
 }
 
 /** The definitional fields required to create a space; presentation is derived. */
@@ -502,39 +733,61 @@ export async function followSpace(slug: string): Promise<void> {
  * create never duplicates or overwrites), and the membership upsert keeps the
  * creator as `admin`, preserving the existing behavior.
  */
-export async function createSpace(input: CreateSpaceInput): Promise<void> {
+export async function createSpace(input: CreateSpaceInput): Promise<string> {
   const meId = await getUserId()
-  const slug = input.slug?.trim()
+  const base = input.slug?.trim()
   const title = input.title?.trim()
-  if (!slug || !title) throw new Error('A valid space is required.')
+  if (!base || !title) throw new Error('A valid space is required.')
   await ensureSpacesTable()
   await ensureSpaceMembersTable()
 
-  await db
-    .insert(spacesTable)
-    .values({
-      slug,
-      kind: kindToDb(input.kind),
-      title,
-      category: input.category,
-      description: input.description,
-      // Communities are always public; groups no longer expose a public/private
-      // selector, so every new space stores privacy 'Public'. Group access is
-      // governed entirely by join_policy below.
-      privacy: 'Public',
-      // Group access control. Communities always use `anyone` (public + Follow).
-      joinPolicy: input.kind === 'groups' ? normalizeJoinPolicy(input.joinPolicy) : 'anyone',
-      createdBy: meId,
-    })
-    .onConflictDoNothing({ target: spacesTable.slug })
+  const joinPolicy =
+    input.kind === 'groups' ? normalizeJoinPolicy(input.joinPolicy) : 'anyone'
+
+  // Guarantee a unique slug server-side: `onConflictDoNothing` returns no row
+  // when the slug is already taken (possibly by a space this user can't even
+  // see), so we retry with a short random suffix until the insert succeeds.
+  // The creator is only recorded as admin for the slug we actually created, so
+  // we can never attach to someone else's existing space.
+  let finalSlug = base
+  let created = false
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const inserted = await db
+      .insert(spacesTable)
+      .values({
+        slug: finalSlug,
+        kind: kindToDb(input.kind),
+        title,
+        category: input.category,
+        description: input.description,
+        // Communities are always public; groups no longer expose a public/private
+        // selector, so every new space stores privacy 'Public'. Group access is
+        // governed entirely by join_policy.
+        privacy: 'Public',
+        joinPolicy,
+        createdBy: meId,
+      })
+      .onConflictDoNothing({ target: spacesTable.slug })
+      .returning({ slug: spacesTable.slug })
+    if (inserted.length > 0) {
+      created = true
+      break
+    }
+    finalSlug = `${base}-${Math.random().toString(36).slice(2, 6)}`
+  }
+  if (!created) {
+    throw new Error('Could not create the space. Please try a different name.')
+  }
 
   await db
     .insert(spaceMembers)
-    .values({ slug, userId: meId, role: 'admin' })
+    .values({ slug: finalSlug, userId: meId, role: 'admin' })
     .onConflictDoUpdate({
       target: [spaceMembers.slug, spaceMembers.userId],
       set: { role: 'admin' },
     })
+
+  return finalSlug
 }
 
 /**
