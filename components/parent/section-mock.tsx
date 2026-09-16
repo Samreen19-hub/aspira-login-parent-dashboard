@@ -1,10 +1,11 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import useSWR from "swr"
-import { getSpaceCounts, getInviteableUsers, inviteToSpace } from "@/app/actions/spaces"
+import useSWRInfinite from "swr/infinite"
+import { getSpaceCounts, getInviteableUsers, getConnectionInviteableUsers, inviteToSpace, listSpacesPage, type SpaceScope } from "@/app/actions/spaces"
 import { Bell, BookOpen, Check, Globe2, Heart, Layers3, MessageCircle, Search, Users, UserPlus } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -46,23 +47,64 @@ export function SectionMock({ kind }: { kind: Kind }) {
   return <PageShell title={section.title} description={section.description} icon={Icon}><div className="grid gap-4">{section.items.map(([title, meta, detail]) => <Card key={title} className="border-border/80"><CardHeader className="flex flex-row items-start justify-between gap-4"><div><CardTitle className="font-display text-lg">{title}</CardTitle><p className="mt-1 text-sm text-muted-foreground">{meta}</p></div><Badge variant="secondary" className="bg-brand-muted text-brand">{kind === "messages" ? "New" : "Active"}</Badge></CardHeader><CardContent><p className="text-sm leading-6 text-muted-foreground">{detail}</p></CardContent></Card>)}</div></PageShell>
 }
 
+const PAGE_SIZE = 12
+
 function SocialSection({ kind }: { kind: SocialKind }) {
   const [query, setQuery] = useState("")
+  const [debouncedQuery, setDebouncedQuery] = useState("")
   const [activeFilter, setActiveFilter] = useState("All")
   const [createOpen, setCreateOpen] = useState(false)
   const [mineOnly, setMineOnly] = useState(false)
-  const { spaces, joined, toggleJoined, following, toggleFollowing } = useSocialStore()
+  // Membership/following state + toggles come from the store; the spaces
+  // THEMSELVES are paginated from the DB (never the full store array), so the
+  // browser only ever holds the pages actually viewed.
+  const { joined, toggleJoined, following, toggleFollowing } = useSocialStore()
   // Member/follower counts come from the DB (public.space_members), never a static number.
-  const { data: counts } = useSWR("space-counts", getSpaceCounts, { revalidateOnFocus: false })
+  const { data: counts, mutate: mutateCounts } = useSWR("space-counts", getSpaceCounts, { revalidateOnFocus: false })
   const isGroups = kind === "groups"
   const Icon = isGroups ? Users : Globe2
-  const sectionSpaces = useMemo(() => spaces.filter((space) => space.kind === kind), [spaces, kind])
-  const items = useMemo(() => sectionSpaces.filter((space) => {
-    const matchesQuery = `${space.title} ${space.description} ${space.category}`.toLowerCase().includes(query.toLowerCase())
-    const isMine = isGroups ? joined.includes(space.slug) : following.includes(space.slug)
-    return matchesQuery && (activeFilter === "All" || space.category === activeFilter) && (!mineOnly || isMine)
-  }), [activeFilter, query, sectionSpaces, mineOnly, isGroups, joined, following])
+  // `all` = eligible discovery (groups) / every public community; `mine` =
+  // joined groups / followed communities. The universe is resolved SERVER-SIDE.
+  const scope: SpaceScope = mineOnly ? "mine" : "all"
+
+  // Debounce the search box so typing doesn't fire a DB query per keystroke.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query), 250)
+    return () => window.clearTimeout(timer)
+  }, [query])
+
+  // DB-backed, paginated discovery. Eligibility (for groups) and public/followed
+  // scope (for communities) are decided server-side; category and search are SQL
+  // predicates. Each page fetches `limit + 1` rows so `hasMore` needs no count.
+  const { data, size, setSize, isValidating, mutate } = useSWRInfinite(
+    (index, previous: { items: SocialSpace[]; hasMore: boolean } | null) => {
+      if (previous && !previous.hasMore) return null
+      return ["spaces-page", kind, scope, activeFilter, debouncedQuery, index] as const
+    },
+    ([, k, s, category, search, index]) =>
+      listSpacesPage({ kind: k, scope: s, category, search, limit: PAGE_SIZE, offset: index * PAGE_SIZE }),
+    { revalidateOnFocus: false, revalidateFirstPage: false },
+  )
+
+  // Any filter/scope change collapses discovery back to the first page.
+  useEffect(() => { setSize(1) }, [kind, scope, activeFilter, debouncedQuery, setSize])
+
+  const pages = data ?? []
+  const items = pages.flatMap((page) => page.items)
+  const hasMore = pages.length > 0 ? pages[pages.length - 1].hasMore : false
+  const isLoading = data === undefined
+  const isLoadingMore = isValidating && pages.length > 0 && pages.length < size
   const filters = ["All", ...(isGroups ? groupCategories : communityCategories)]
+
+  // A join/leave (or follow/unfollow) changes the counts and, for the `mine`
+  // scope, which spaces appear — so revalidate the visible pages and the counts
+  // after every toggle. Any rejection message is returned for inline display.
+  async function handleToggle(slug: string) {
+    const result = isGroups ? await toggleJoined(slug) : await toggleFollowing(slug)
+    await Promise.all([mutate(), mutateCounts()])
+    return result
+  }
+
   return <PageShell title={isGroups ? "Groups" : "Communities"} description={isGroups ? "Connect with families across your school community." : "Discover school communities that match your interests."} icon={Icon}>
     <div className="flex flex-col gap-5">
       <Card className="overflow-hidden border-brand/15 bg-gradient-to-br from-brand-muted via-background to-background shadow-sm">
@@ -77,8 +119,15 @@ function SocialSection({ kind }: { kind: SocialKind }) {
         </CardContent>
       </Card>
       <div className="flex flex-col gap-3 sm:flex-row"><div className="relative flex-1"><Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${kind}...`} className="h-11 rounded-xl pl-9" aria-label={`Search ${kind}`} /></div><div className="flex gap-2 overflow-x-auto pb-1">{filters.map((filter) => <Button key={filter} type="button" size="sm" variant={activeFilter === filter ? "default" : "outline"} className="shrink-0 rounded-xl" onClick={() => setActiveFilter(filter)}>{filter}</Button>)}</div></div>
-      <div className="flex items-center justify-between"><p className="text-sm font-medium text-muted-foreground">{items.length} {isGroups ? "groups" : "communities"} {mineOnly ? "" : "to explore"}</p><Button type="button" variant={mineOnly ? "secondary" : "ghost"} size="sm" className="rounded-xl text-brand" aria-pressed={mineOnly} onClick={() => setMineOnly((value) => !value)}>{isGroups ? "My groups" : "Following"}</Button></div>
-      {items.length ? <div className="grid gap-4 md:grid-cols-2">{items.map((space) => <SocialCard key={space.slug} space={space} memberCount={counts?.[space.slug] ?? 0} isJoined={joined.includes(space.slug)} isFollowing={following.includes(space.slug)} onToggle={() => (isGroups ? toggleJoined(space.slug) : toggleFollowing(space.slug))} />)}</div> : <Card className="border-dashed"><CardContent className="flex flex-col items-center gap-2 p-12 text-center"><Layers3 className="size-8 text-muted-foreground" /><p className="font-semibold">{mineOnly ? (isGroups ? "You haven't joined any groups yet" : "You're not following any communities yet") : "Nothing matches that search"}</p><p className="text-sm text-muted-foreground">{mineOnly ? (isGroups ? "Join a group to see it here." : "Follow a community to see it here.") : "Try another keyword or reset your filter."}</p><Button variant="outline" className="mt-2 rounded-xl" onClick={() => { setQuery(""); setActiveFilter("All"); setMineOnly(false) }}>{mineOnly ? "Browse all" : "Clear filters"}</Button></CardContent></Card>}
+      <div className="flex items-center justify-between"><p className="text-sm font-medium text-muted-foreground">{items.length}{hasMore ? "+" : ""} {isGroups ? (mineOnly ? "groups joined" : "groups to explore") : (mineOnly ? "following" : "communities to explore")}</p><Button type="button" variant={mineOnly ? "secondary" : "ghost"} size="sm" className="rounded-xl text-brand" aria-pressed={mineOnly} onClick={() => setMineOnly((value) => !value)}>{isGroups ? "My groups" : "Following"}</Button></div>
+      {isLoading ? (
+        <div className="grid gap-4 md:grid-cols-2">{Array.from({ length: 4 }).map((_, index) => <Card key={index} className="h-52 animate-pulse bg-muted/40" aria-hidden />)}</div>
+      ) : items.length ? (
+        <>
+          <div className="grid gap-4 md:grid-cols-2">{items.map((space) => <SocialCard key={space.slug} space={space} memberCount={counts?.[space.slug] ?? 0} isJoined={joined.includes(space.slug)} isFollowing={following.includes(space.slug)} onToggle={() => handleToggle(space.slug)} />)}</div>
+          {hasMore && <div className="flex justify-center"><Button variant="outline" className="rounded-xl" disabled={isLoadingMore} onClick={() => setSize(size + 1)}>{isLoadingMore ? "Loading…" : `Load more ${isGroups ? "groups" : "communities"}`}</Button></div>}
+        </>
+      ) : <Card className="border-dashed"><CardContent className="flex flex-col items-center gap-2 p-12 text-center"><Layers3 className="size-8 text-muted-foreground" /><p className="font-semibold">{mineOnly ? (isGroups ? "You haven't joined any groups yet" : "You're not following any communities yet") : "Nothing matches that search"}</p><p className="text-sm text-muted-foreground">{mineOnly ? (isGroups ? "Join a group to see it here." : "Follow a community to see it here.") : "Try another keyword or reset your filter."}</p><Button variant="outline" className="mt-2 rounded-xl" onClick={() => { setQuery(""); setActiveFilter("All"); setMineOnly(false) }}>{mineOnly ? "Browse all" : "Clear filters"}</Button></CardContent></Card>}
     </div>
     <CreateSpaceDialog open={createOpen} onOpenChange={setCreateOpen} kind={kind} />
   </PageShell>
@@ -100,12 +149,12 @@ function SocialCard({ space, memberCount, isJoined, isFollowing, onToggle }: { s
     setPending(false)
     if (result) setError(result)
   }
-  return <Card className="border-border/80 transition-shadow hover:shadow-md"><Link href={detailHref} className="block"><CardHeader className="flex flex-row items-start gap-3"><span className={`grid size-12 shrink-0 place-items-center rounded-2xl text-sm font-bold ${space.tone}`}>{space.initials}</span><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><CardTitle className="font-display text-lg leading-tight">{space.title}</CardTitle><Badge variant="secondary" className="shrink-0 bg-muted text-muted-foreground">{space.category}</Badge></div><CardDescription className="mt-1 flex items-center gap-1.5"><Users className="size-3.5" />{memberCount} members</CardDescription></div></CardHeader></Link><CardContent><p className="text-sm leading-6 text-muted-foreground">{space.description}</p></CardContent><CardFooter className="flex flex-col items-stretch gap-2 border-t bg-muted/20 pt-4"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-3 text-xs text-muted-foreground"><span className="flex items-center gap-1"><MessageCircle className="size-3.5" />Active discussions</span><span className="flex items-center gap-1"><Bell className="size-3.5" />Updates</span></div><Button size="sm" variant={active ? "secondary" : "default"} className="rounded-xl" disabled={pending} onClick={handleToggle}>{active ? <><Check data-icon="inline-start" />{isGroups ? "Joined" : "Following"}</> : <><UserPlus data-icon="inline-start" />{isGroups ? "Join" : "Follow"}</>}</Button></div>{error && <p role="alert" className="text-xs leading-5 text-destructive">{error}</p>}</CardFooter></Card>
+  return <Card className="border-border/80 transition-shadow hover:shadow-md"><Link href={detailHref} className="block"><CardHeader className="flex flex-row items-start gap-3"><span className={`grid size-12 shrink-0 place-items-center rounded-2xl text-sm font-bold ${space.tone}`}>{space.initials}</span><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><CardTitle className="font-display text-lg leading-tight">{space.title}</CardTitle><Badge variant="secondary" className="shrink-0 bg-muted text-muted-foreground">{space.category}</Badge></div><CardDescription className="mt-1 flex items-center gap-1.5"><Users className="size-3.5" />{memberCount} {isGroups ? "members" : "followers"}</CardDescription></div></CardHeader></Link><CardContent><p className="text-sm leading-6 text-muted-foreground">{space.description}</p></CardContent><CardFooter className="flex flex-col items-stretch gap-2 border-t bg-muted/20 pt-4"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-3 text-xs text-muted-foreground"><span className="flex items-center gap-1"><MessageCircle className="size-3.5" />Active discussions</span><span className="flex items-center gap-1"><Bell className="size-3.5" />Updates</span></div><Button size="sm" variant={active ? "secondary" : "default"} className="rounded-xl" disabled={pending} onClick={handleToggle}>{active ? <><Check data-icon="inline-start" />{isGroups ? "Joined" : "Following"}</> : <><UserPlus data-icon="inline-start" />{isGroups ? "Join" : "Follow"}</>}</Button></div>{error && <p role="alert" className="text-xs leading-5 text-destructive">{error}</p>}</CardFooter></Card>
 }
 
 function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpenChange: (open: boolean) => void; kind: SocialKind }) {
   const router = useRouter()
-  const { addSpace, spaces } = useSocialStore()
+  const { addSpace } = useSocialStore()
   const isGroups = kind === "groups"
   const categories = isGroups ? groupCategories : communityCategories
   const [name, setName] = useState("")
@@ -115,17 +164,37 @@ function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpen
   // (Follow), so they have no selector and this state is simply ignored for them.
   const [joinPolicy, setJoinPolicy] = useState<"anyone" | "connections" | "invite">("anyone")
   const [invitees, setInvitees] = useState<string[]>([])
-  // Real users to invite, from the DB (neon_auth.user + profiles) — never the old
-  // dummy INVITE_CONTACTS list. Loaded only while the dialog is open.
-  const { data: people } = useSWR(open ? "invite-users" : null, getInviteableUsers, { revalidateOnFocus: false })
+  // WHO the invite picker offers (and whether it shows at all):
+  //   - Invite-only GROUP → ONLY the creator's accepted connections, so an
+  //     invite-only group can never be seeded with strangers.
+  //   - Anyone / My-connections GROUP → picker hidden entirely (no invitations;
+  //     access is decided by the join policy, not by a seed invite list).
+  //   - COMMUNITY → any real user, as an OPTIONAL sharing feature — community
+  //     invitations never gate access (communities are always public/Follow).
+  const inviteMode: "connections" | "all" | "none" = isGroups
+    ? (joinPolicy === "invite" ? "connections" : "none")
+    : "all"
+  const showInvite = inviteMode !== "none"
+  // Real users to invite, from the DB (neon_auth.user + profiles) — never a dummy
+  // list. Connections-only for invite-only groups; all users for communities.
+  const { data: people } = useSWR(
+    open && showInvite ? ["invite-users", inviteMode] : null,
+    () => (inviteMode === "connections" ? getConnectionInviteableUsers() : getInviteableUsers()),
+    { revalidateOnFocus: false },
+  )
 
   function reset() { setName(""); setDescription(""); setCategory(categories[0]); setJoinPolicy("anyone"); setInvitees([]) }
+  function selectPolicy(value: "anyone" | "connections" | "invite") {
+    setJoinPolicy(value)
+    // Invitees only apply to an invite-only group; drop any selection when
+    // switching to a policy whose picker is hidden so nothing stale is sent.
+    if (value !== "invite") setInvitees([])
+  }
   function toggleInvitee(id: string) { setInvitees((current) => (current.includes(id) ? current.filter((value) => value !== id) : [...current, id])) }
   async function create() {
     const trimmed = name.trim()
     if (!trimmed) return
-    let slug = slugify(trimmed)
-    if (spaces.some((space) => space.slug === slug)) slug = `${slug}-${Date.now().toString().slice(-4)}`
+    const slug = slugify(trimmed)
     const space: SocialSpace = {
       slug,
       kind,
@@ -146,15 +215,17 @@ function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpen
       // space_invitations below, so no dummy names are stored here.
       memberNames: [],
     }
-    // Records the creator as an ADMIN member in the DB (auto-join + auto-admin) first, so the
-    // new space's detail page already recognizes the owner AND the creator is allowed to invite.
-    await addSpace(space)
+    // Records the creator as an ADMIN member in the DB (auto-join + auto-admin) and returns the
+    // FINAL server-assigned slug (guaranteed unique), which we use for invites AND navigation so
+    // a slug collision can never send the creator to the wrong space or invite into it.
+    const finalSlug = (await addSpace(space)) ?? slug
     // Persist the chosen invitees as REAL pending invitations (not memberships). They stay
-    // `pending` in space_invitations until each user actually joins/accepts.
-    if (invitees.length) { try { await inviteToSpace(slug, invitees) } catch {} }
+    // `pending` in space_invitations until each user actually joins/accepts. Only invite-only
+    // groups and communities ever carry invitees here.
+    if (invitees.length) { try { await inviteToSpace(finalSlug, invitees) } catch {} }
     reset()
     onOpenChange(false)
-    router.push(`/parent/${kind}/${slug}`)
+    router.push(`/parent/${kind}/${finalSlug}`)
   }
 
   return (
