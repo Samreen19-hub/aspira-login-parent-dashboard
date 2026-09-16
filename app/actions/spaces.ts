@@ -7,40 +7,139 @@ import {
   db,
   ensureSpaceInvitationsTable,
   ensureSpaceMembersTable,
+  ensureSpacesTable,
 } from '@/lib/db'
 import {
   profiles,
   spaceInvitations,
   spaceMembers,
+  spaces as spacesTable,
   user,
 } from '@/lib/db/schema'
+import { SOCIAL_SPACES, type SocialSpace } from '@/lib/parent-data'
 
-/**
- * DB-backed Groups/Communities membership & following, on the existing Neon
- * database + Better Auth session, using the same lazy-provisioning
- * (`ensureSpaceMembersTable`) and server-action conventions as the rest of the
- * app (see `posts.ts` / `network.ts`).
- *
- * Single source of truth: `public.space_members`. One row = one user belonging
- * to one space (by its static `slug`), with `role` = `member | admin`. This one
- * table backs group membership, community following, AND admin ownership.
- *
- * Security model, enforced ENTIRELY server-side:
- *   - The acting user of every mutation is ALWAYS the authenticated session
- *     user. The browser can never supply or spoof the actor id.
- *   - Admin-only actions (`makeAdmin`, `removeMember`, `deleteSpace`) verify the
- *     caller is an admin of the space before doing anything.
- *   - A sole admin can never leave the space ownerless: they must transfer
- *     ownership to another member first (or delete the space).
- *
- * This module is ONLY for the Groups/Communities social pages. It never touches
- * the group-chat tables (`conversations`, `conversation_members`), the posts
- * feed, `connections`, or `follows`.
- */
-
+/** A member's role within a space. Admins can invite, remove, and delete. */
 export type SpaceRole = 'member' | 'admin'
 
-/** The current user's profile identity, resolved from profiles + Better Auth. */
+// ---------------------------------------------------------------------------
+// Space DEFINITIONS — DB-backed existence & metadata (public.spaces).
+//
+// `public.spaces` is the source of truth for whether a Group/Community EXISTS
+// and its metadata. It replaces the old hardcoded SOCIAL_SPACES + localStorage
+// arrangement so a created space survives refresh, logout/login, and other
+// devices. Membership/invitations stay in space_members/space_invitations.
+// ---------------------------------------------------------------------------
+
+/** Default badge tone for spaces without a built-in preset (matches the old create flow). */
+const DEFAULT_SPACE_TONE = 'bg-violet-100 text-violet-700'
+
+/** Built-in presentation presets, keyed by slug, so seeded spaces keep their exact look. */
+const BUILT_IN_BY_SLUG = new Map<string, SocialSpace>(
+  SOCIAL_SPACES.map((space) => [space.slug, space]),
+)
+
+/** DB stores singular `group | community`; the UI uses plural `groups | communities`. */
+function kindToDb(kind: 'groups' | 'communities'): 'group' | 'community' {
+  return kind === 'groups' ? 'group' : 'community'
+}
+function kindFromDb(kind: string): 'groups' | 'communities' {
+  return kind === 'community' ? 'communities' : 'groups'
+}
+
+/** Presentation-only initials from a title (mirrors the client `initialsOf`). */
+function initialsOf(value: string): string {
+  return (
+    value
+      .split(' ')
+      .map((word) => word[0])
+      .slice(0, 2)
+      .join('')
+      .toUpperCase() || 'GC'
+  )
+}
+
+/**
+ * Seeds the built-in SOCIAL_SPACES into `public.spaces` exactly once per process,
+ * idempotently. `onConflictDoNothing` on the unique `slug` index means an already
+ * present space (built-in OR user-created that happens to share a slug) is never
+ * duplicated and its existing row is never overwritten, so re-running is safe and
+ * preserves any data. Built-in spaces are system-owned (`created_by = null`).
+ */
+let spacesSeeded: Promise<void> | null = null
+function seedBuiltInSpaces(): Promise<void> {
+  if (!spacesSeeded) {
+    spacesSeeded = (async () => {
+      await ensureSpacesTable()
+      if (SOCIAL_SPACES.length === 0) return
+      await db
+        .insert(spacesTable)
+        .values(
+          SOCIAL_SPACES.map((space) => ({
+            slug: space.slug,
+            kind: kindToDb(space.kind),
+            title: space.title,
+            category: space.category,
+            description: space.description,
+            privacy: space.privacy,
+            createdBy: null,
+          })),
+        )
+        .onConflictDoNothing({ target: spacesTable.slug })
+    })().catch((error) => {
+      // Reset so a transient failure can be retried on the next call.
+      spacesSeeded = null
+      throw error
+    })
+  }
+  return spacesSeeded
+}
+
+/** Projects a `public.spaces` row into the UI's `SocialSpace` shape. */
+function toSocialSpace(row: typeof spacesTable.$inferSelect): SocialSpace {
+  const builtIn = BUILT_IN_BY_SLUG.get(row.slug)
+  return {
+    slug: row.slug,
+    kind: kindFromDb(row.kind),
+    title: row.title,
+    description: row.description ?? '',
+    category: row.category ?? '',
+    // Live counts come from public.space_members via getSpaceCounts, so this
+    // static field is unused for display and kept only for the shared shape.
+    members: 0,
+    // Presentation fields aren't persisted; built-ins keep their preset look and
+    // user-created spaces derive the same defaults the old create flow used.
+    tone: builtIn?.tone ?? DEFAULT_SPACE_TONE,
+    initials: builtIn?.initials ?? initialsOf(row.title),
+    privacy: row.privacy === 'Private' ? 'Private' : 'Public',
+    memberNames: builtIn?.memberNames ?? [],
+  }
+}
+
+/**
+ * Every Group/Community that EXISTS, read from `public.spaces` (never from a
+ * hardcoded array or localStorage). Seeds the built-in spaces on first call so a
+ * fresh database is fully populated. No auth requirement: listing space names is
+ * public browse information, matching the existing public read-only behavior —
+ * membership/roster/feed access is still gated separately.
+ */
+export async function listSpaces(): Promise<SocialSpace[]> {
+  await seedBuiltInSpaces()
+  const rows = await db.select().from(spacesTable)
+  return rows.map(toSocialSpace)
+}
+
+/** The definitional fields required to create a space; presentation is derived. */
+export type CreateSpaceInput = {
+  slug: string
+  kind: 'groups' | 'communities'
+  title: string
+  description: string
+  category: string
+  privacy: 'Public' | 'Private'
+}
+
+/**
+ * The current user's profile identity, resolved from profiles + Better Auth. */
 export type Me = {
   id: string
   name: string
@@ -278,14 +377,34 @@ export async function followSpace(slug: string): Promise<void> {
 }
 
 /**
- * Records the space CREATOR as an admin member of the space they just created.
- * Upserts to `admin` so the creator always owns their new space, preserving the
- * existing auto-join + auto-admin behavior. Called from the create flow.
+ * Creates a Group/Community: persists the space DEFINITION to `public.spaces`
+ * AND records the CREATOR as an admin member (auto-join + auto-admin), so the
+ * space survives refresh, logout/login, and other devices. `created_by` is
+ * ALWAYS the authenticated session user — the browser can never supply or spoof
+ * the creator id. The space insert is idempotent on the unique `slug` (a repeat
+ * create never duplicates or overwrites), and the membership upsert keeps the
+ * creator as `admin`, preserving the existing behavior.
  */
-export async function createSpace(slug: string): Promise<void> {
+export async function createSpace(input: CreateSpaceInput): Promise<void> {
   const meId = await getUserId()
-  if (!slug) throw new Error('A valid space is required.')
+  const slug = input.slug?.trim()
+  const title = input.title?.trim()
+  if (!slug || !title) throw new Error('A valid space is required.')
+  await ensureSpacesTable()
   await ensureSpaceMembersTable()
+
+  await db
+    .insert(spacesTable)
+    .values({
+      slug,
+      kind: kindToDb(input.kind),
+      title,
+      category: input.category,
+      description: input.description,
+      privacy: input.privacy === 'Private' ? 'Private' : 'Public',
+      createdBy: meId,
+    })
+    .onConflictDoNothing({ target: spacesTable.slug })
 
   await db
     .insert(spaceMembers)
@@ -393,17 +512,21 @@ export async function removeMember(slug: string, userId: string): Promise<void> 
 }
 
 /**
- * Admin-only. Deletes the entire space membership — every `space_members` row
- * for `slug`. The caller must be an admin. This only removes the membership
- * layer; the posts feed is handled separately by the existing post system.
+ * Admin-only. Deletes the space: its definition row in `public.spaces` AND every
+ * `space_members` row for `slug`, so it disappears from the listing and can no
+ * longer be resolved. The caller must be an admin (built-in system-owned spaces
+ * have no admin and therefore cannot be deleted this way). The posts feed is
+ * handled separately by the existing post system and is intentionally untouched.
  */
 export async function deleteSpace(slug: string): Promise<void> {
   const meId = await getUserId()
   if (!slug) throw new Error('A valid space is required.')
+  await ensureSpacesTable()
   await ensureSpaceMembersTable()
   await assertAdmin(slug, meId)
 
   await db.delete(spaceMembers).where(eq(spaceMembers.slug, slug))
+  await db.delete(spacesTable).where(eq(spacesTable.slug, slug))
 }
 
 // ---------------------------------------------------------------------------

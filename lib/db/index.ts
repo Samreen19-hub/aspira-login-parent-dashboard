@@ -379,6 +379,59 @@ export function ensureSpaceMembersTable(): Promise<void> {
 }
 
 /**
+ * Lazily provisions the `public.spaces` table (and its supporting indexes)
+ * using the shared pool, following the exact same idempotent (`IF NOT EXISTS`),
+ * memoized, schema-qualified pattern as the helpers above. This is the source
+ * of truth for the EXISTENCE and metadata of a Groups/Communities space,
+ * replacing the previous hardcoded `SOCIAL_SPACES` + localStorage arrangement.
+ * It sits ALONGSIDE `public.space_members`/`public.space_invitations` (which
+ * remain the source of truth for membership and invitations) and never
+ * duplicates them. `kind` is `group | community`. `created_by` is nullable so
+ * the seeded built-in spaces can be system-owned (NULL). No foreign keys to
+ * `neon_auth`, matching the existing Aspira convention. This helper only creates
+ * the table; seeding the built-in spaces is done idempotently in the spaces
+ * action layer so this low-level module stays free of app data.
+ */
+let spacesReady: Promise<void> | null = null
+export function ensureSpacesTable(): Promise<void> {
+  if (!spacesReady) {
+    spacesReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.spaces (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          slug text NOT NULL,
+          kind text NOT NULL,
+          title text NOT NULL,
+          category text,
+          description text,
+          privacy text NOT NULL DEFAULT 'Public',
+          created_by uuid,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      // One space per slug -> seeding/creating is idempotent and every posts,
+      // membership, and invitation row keyed by slug resolves to exactly one
+      // space definition.
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS spaces_slug_unique
+        ON public.spaces (slug)
+      `)
+      // Covers the listing pages' per-kind (groups vs communities) filtering.
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS spaces_kind
+        ON public.spaces (kind)
+      `)
+    })().catch((error) => {
+      // Reset so a transient failure can be retried on the next call.
+      spacesReady = null
+      throw error
+    })
+  }
+  return spacesReady
+}
+
+/**
  * Lazily provisions the `public.space_invitations` table (and its supporting
  * indexes) using the shared pool, following the exact same idempotent
  * (`IF NOT EXISTS`), memoized, schema-qualified pattern as the helpers above.

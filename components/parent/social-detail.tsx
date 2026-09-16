@@ -100,6 +100,21 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
     await Promise.all([refresh(), mutateState(), mutateMembers()])
   }
 
+  // Space definitions now load asynchronously from the DB (public.spaces), so
+  // wait for hydration before deciding a space is missing — otherwise a valid
+  // space would briefly flash "no longer available" on first load/refresh.
+  if (!hydrated) {
+    return (
+      <div className="mx-auto max-w-5xl">
+        <Link href={`/parent/${kind}`} className="inline-flex w-fit items-center gap-2 text-sm font-medium text-brand hover:underline"><ArrowLeft className="size-4" />{backLabel}</Link>
+        <Card className="mt-5 items-center gap-3 p-12 text-center">
+          <span className="grid size-14 animate-pulse place-items-center rounded-2xl bg-brand-muted text-brand"><Users className="size-7" /></span>
+          <p className="text-sm text-muted-foreground">Loading space…</p>
+        </Card>
+      </div>
+    )
+  }
+
   if (!validSpace || !record) {
     return (
       <div className="mx-auto max-w-5xl">
