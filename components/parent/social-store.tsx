@@ -30,8 +30,10 @@ type SocialState = {
   hydrated: boolean
   /** True when the signed-in user is an admin of the space (role = 'admin'). */
   isAdmin: (slug: string) => boolean
-  toggleJoined: (slug: string) => Promise<void>
-  toggleFollowing: (slug: string) => Promise<void>
+  /** Join/leave a group. Resolves to an error message when a join was rejected (e.g. join policy), else null. */
+  toggleJoined: (slug: string) => Promise<string | null>
+  /** Follow/unfollow a community. Communities are unrestricted, so this resolves to null. */
+  toggleFollowing: (slug: string) => Promise<string | null>
   addSpace: (space: SocialSpace) => Promise<void>
   removeSpace: (slug: string) => Promise<void>
   getSpace: (slug: string) => SocialSpace | undefined
@@ -60,16 +62,34 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
       following: memberSlugs,
       hydrated: dbSpaces !== undefined && memberships !== undefined,
       isAdmin: (slug: string) => adminSlugs.has(slug),
-      // Join/leave a group. A sole-admin leave is rejected server-side (they must
-      // transfer or delete via the detail page), so we just revalidate on failure.
+      // Join/leave a group. Group join is policy-gated server-side (anyone /
+      // connections / invite), so a rejected join surfaces its message to the
+      // caller instead of being swallowed. A sole-admin leave is also rejected
+      // server-side (they must transfer or delete via the detail page). Either
+      // way we revalidate, and return the message (or null on success).
       toggleJoined: async (slug: string) => {
-        try { if (isMemberOf(slug)) await leaveSpace(slug); else await joinSpace(slug) } catch {}
+        let error: string | null = null
+        try {
+          if (isMemberOf(slug)) await leaveSpace(slug)
+          else await joinSpace(slug)
+        } catch (cause) {
+          error = cause instanceof Error ? cause.message : "Something went wrong. Please try again."
+        }
         await mutate()
+        return error
       },
-      // Follow/unfollow a community — same table, same semantics as above.
+      // Follow/unfollow a community — same table, but communities are always
+      // public and unrestricted, so a follow never fails a policy check.
       toggleFollowing: async (slug: string) => {
-        try { if (isMemberOf(slug)) await leaveSpace(slug); else await joinSpace(slug) } catch {}
+        let error: string | null = null
+        try {
+          if (isMemberOf(slug)) await leaveSpace(slug)
+          else await joinSpace(slug)
+        } catch (cause) {
+          error = cause instanceof Error ? cause.message : "Something went wrong. Please try again."
+        }
         await mutate()
+        return error
       },
       // Create: persist the space DEFINITION to public.spaces AND record the
       // creator as ADMIN in public.space_members (both server-side, creator id
@@ -83,7 +103,9 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
             title: space.title,
             description: space.description,
             category: space.category,
-            privacy: space.privacy,
+            // Privacy is intentionally not sent: communities are always public
+            // and groups are governed by joinPolicy, so createSpace stores a
+            // fixed 'Public' server-side. Access is kind-based, not privacy-based.
             joinPolicy: space.joinPolicy,
           })
         } catch {}

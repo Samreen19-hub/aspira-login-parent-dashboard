@@ -31,6 +31,11 @@ function initialsOf(name: string) {
   )
 }
 
+/** Human label for a GROUP's join policy (communities never show this — they use Follow). */
+function joinPolicyLabel(policy?: "anyone" | "connections" | "invite") {
+  return policy === "connections" ? "My connections" : policy === "invite" ? "Invite only" : "Anyone can join"
+}
+
 export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; slug: string }) {
   const { getSpace, joined, toggleJoined, following, toggleFollowing, isAdmin, removeSpace, hydrated, refresh } = useSocialStore()
   const { posts, removePost, removePostsByScope } = useFeedStore()
@@ -47,6 +52,9 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   // Member/follower the admin is about to promote to admin. Null when idle.
   const [makeAdminTarget, setMakeAdminTarget] = useState<SpaceMember | null>(null)
   const [copied, setCopied] = useState(false)
+  // Message shown when a group join is rejected by its join policy (connections /
+  // invite only). Cleared on the next attempt. Communities never set this.
+  const [joinError, setJoinError] = useState<string | null>(null)
   const [focusedId, setFocusedId] = useState<string | null>(null)
   // Id of the post just hidden via the DB-backed action, driving the temporary
   // "Post hidden" + Undo confirmation. Null when no confirmation is showing.
@@ -128,10 +136,13 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
     )
   }
 
-  const isPublic = record.privacy === "Public"
-  // Public spaces let anyone read the feed and basic info; private spaces reveal nothing until
-  // the parent joins/follows. Full access (member/follower/admin) always sees everything.
-  const canViewPosts = hasFullAccess || isPublic
+  // Access is KIND-based, not privacy-based. A COMMUNITY is always publicly
+  // viewable (anyone can read its feed/details; Follow only controls the user's
+  // own feed relationship). A GROUP is always member-gated — its posts and
+  // details stay hidden from non-members even though the legacy `privacy` column
+  // now stores 'Public' for every group. Full access (member/follower/admin)
+  // always sees everything.
+  const canViewPosts = isGroup ? hasFullAccess : true
 
   // Wait for the persisted membership state before rendering anything private, so member-only
   // content (feed, composer, members, invites) never flashes before the access check applies.
@@ -148,8 +159,13 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const memberCount = spaceState?.memberCount ?? 0
 
   // Join/follow the current space (used by the header, the private gate, and the composer gate).
+  // A group join can be rejected server-side by its join policy (connections / invite only); the
+  // returned message is shown to the parent instead of silently doing nothing. Communities always
+  // succeed. On success we clear any prior error and revalidate membership.
   async function joinCurrent() {
-    if (isGroup) await toggleJoined(slug); else await toggleFollowing(slug)
+    setJoinError(null)
+    const error = isGroup ? await toggleJoined(slug) : await toggleFollowing(slug)
+    if (error) { setJoinError(error); return }
     await revalidateMembership()
   }
 
@@ -167,7 +183,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="secondary" className="bg-brand-muted text-brand">{record.category}</Badge>
-                  <Badge variant="outline" className="gap-1 text-muted-foreground">{isGroup ? "Group" : "Community"} · {record.privacy}</Badge>
+                  <Badge variant="outline" className="gap-1 text-muted-foreground">{isGroup ? `Group · ${joinPolicyLabel(record.joinPolicy)}` : "Community"}</Badge>
                 </div>
                 <h1 className="mt-2 font-display text-2xl font-bold text-balance">{record.title}</h1>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground text-pretty">{record.description}</p>
@@ -182,6 +198,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
             <h2 className="font-display text-lg font-semibold">{isGroup ? "This group is members only" : "This community is for followers"}</h2>
             <p className="max-w-sm text-sm leading-6 text-muted-foreground">{isGroup ? "Join this group to see group updates and connect with members." : "Follow this community to see community updates and connect with members."}</p>
             <Button className="mt-1 rounded-xl" onClick={joinCurrent}>{isGroup ? <><UserPlus data-icon="inline-start" />Join group</> : <><UserPlus data-icon="inline-start" />Follow</>}</Button>
+            {joinError && <p role="alert" className="max-w-sm text-sm leading-6 text-destructive">{joinError}</p>}
           </CardContent>
         </Card>
       </div>
@@ -275,7 +292,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="secondary" className="bg-brand-muted text-brand">{record.category}</Badge>
-                  <Badge variant="outline" className="gap-1 text-muted-foreground">{isGroup ? "Group" : "Community"} · {record.privacy}</Badge>
+                  <Badge variant="outline" className="gap-1 text-muted-foreground">{isGroup ? `Group · ${joinPolicyLabel(record.joinPolicy)}` : "Community"}</Badge>
                   {admin && <Badge variant="secondary" className="gap-1 bg-brand text-brand-foreground"><ShieldCheck className="size-3.5" />Admin</Badge>}
                 </div>
                 <h1 className="mt-2 font-display text-2xl font-bold text-balance">{record.title}</h1>
@@ -289,6 +306,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
               ) : (
                 <Button variant={isFollowing ? "secondary" : "default"} className="rounded-xl" onClick={() => (isFollowing ? handleLeaveClick() : joinCurrent())}>{isFollowing ? <><Check data-icon="inline-start" />Following</> : "Follow"}</Button>
               )}
+              {joinError && <p role="alert" className="w-full text-sm leading-6 text-destructive sm:max-w-xs">{joinError}</p>}
               <Button variant="outline" size="icon" className="rounded-xl" aria-label="Space options" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>
                 <Settings className="size-4" />
               </Button>
@@ -401,7 +419,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
             <CardHeader><CardTitle className="font-display text-base">About</CardTitle></CardHeader>
             <CardContent className="flex flex-col gap-2 text-sm text-muted-foreground">
               <p className="leading-6">{record.description}</p>
-              <p className="flex items-center gap-2"><MoreHorizontal className="size-4 text-brand" />{record.category} · {record.privacy}</p>
+              <p className="flex items-center gap-2"><MoreHorizontal className="size-4 text-brand" />{isGroup ? `${record.category} · ${joinPolicyLabel(record.joinPolicy)}` : record.category}</p>
             </CardContent>
           </Card>
         </div>
