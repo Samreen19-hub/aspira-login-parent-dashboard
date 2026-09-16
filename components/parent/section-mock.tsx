@@ -84,11 +84,23 @@ function SocialSection({ kind }: { kind: SocialKind }) {
   </PageShell>
 }
 
-function SocialCard({ space, memberCount, isJoined, isFollowing, onToggle }: { space: SocialSpace; memberCount: number; isJoined: boolean; isFollowing: boolean; onToggle: () => void }) {
+function SocialCard({ space, memberCount, isJoined, isFollowing, onToggle }: { space: SocialSpace; memberCount: number; isJoined: boolean; isFollowing: boolean; onToggle: () => Promise<string | null> }) {
   const isGroups = space.kind === "groups"
   const active = isGroups ? isJoined : isFollowing
   const detailHref = `/parent/${space.kind}/${space.slug}`
-  return <Card className="border-border/80 transition-shadow hover:shadow-md"><Link href={detailHref} className="block"><CardHeader className="flex flex-row items-start gap-3"><span className={`grid size-12 shrink-0 place-items-center rounded-2xl text-sm font-bold ${space.tone}`}>{space.initials}</span><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><CardTitle className="font-display text-lg leading-tight">{space.title}</CardTitle><Badge variant="secondary" className="shrink-0 bg-muted text-muted-foreground">{space.category}</Badge></div><CardDescription className="mt-1 flex items-center gap-1.5"><Users className="size-3.5" />{memberCount} members</CardDescription></div></CardHeader></Link><CardContent><p className="text-sm leading-6 text-muted-foreground">{space.description}</p></CardContent><CardFooter className="flex items-center justify-between gap-3 border-t bg-muted/20 pt-4"><div className="flex items-center gap-3 text-xs text-muted-foreground"><span className="flex items-center gap-1"><MessageCircle className="size-3.5" />Active discussions</span><span className="flex items-center gap-1"><Bell className="size-3.5" />Updates</span></div><Button size="sm" variant={active ? "secondary" : "default"} className="rounded-xl" onClick={onToggle}>{active ? <><Check data-icon="inline-start" />{isGroups ? "Joined" : "Following"}</> : <><UserPlus data-icon="inline-start" />{isGroups ? "Join" : "Follow"}</>}</Button></CardFooter></Card>
+  // A group join can be rejected by its join policy (connections / invite only);
+  // the rejection message is shown inline under the action so the parent knows
+  // why nothing happened. Communities (Follow) never hit this.
+  const [error, setError] = useState<string | null>(null)
+  const [pending, setPending] = useState(false)
+  async function handleToggle() {
+    setError(null)
+    setPending(true)
+    const result = await onToggle()
+    setPending(false)
+    if (result) setError(result)
+  }
+  return <Card className="border-border/80 transition-shadow hover:shadow-md"><Link href={detailHref} className="block"><CardHeader className="flex flex-row items-start gap-3"><span className={`grid size-12 shrink-0 place-items-center rounded-2xl text-sm font-bold ${space.tone}`}>{space.initials}</span><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><CardTitle className="font-display text-lg leading-tight">{space.title}</CardTitle><Badge variant="secondary" className="shrink-0 bg-muted text-muted-foreground">{space.category}</Badge></div><CardDescription className="mt-1 flex items-center gap-1.5"><Users className="size-3.5" />{memberCount} members</CardDescription></div></CardHeader></Link><CardContent><p className="text-sm leading-6 text-muted-foreground">{space.description}</p></CardContent><CardFooter className="flex flex-col items-stretch gap-2 border-t bg-muted/20 pt-4"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-3 text-xs text-muted-foreground"><span className="flex items-center gap-1"><MessageCircle className="size-3.5" />Active discussions</span><span className="flex items-center gap-1"><Bell className="size-3.5" />Updates</span></div><Button size="sm" variant={active ? "secondary" : "default"} className="rounded-xl" disabled={pending} onClick={handleToggle}>{active ? <><Check data-icon="inline-start" />{isGroups ? "Joined" : "Following"}</> : <><UserPlus data-icon="inline-start" />{isGroups ? "Join" : "Follow"}</>}</Button></div>{error && <p role="alert" className="text-xs leading-5 text-destructive">{error}</p>}</CardFooter></Card>
 }
 
 function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpenChange: (open: boolean) => void; kind: SocialKind }) {

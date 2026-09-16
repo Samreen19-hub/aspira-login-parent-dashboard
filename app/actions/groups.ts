@@ -520,14 +520,16 @@ export async function getGroupConversation(
   if (!convo) return null
 
   const memberRows = await db
-    .select(PERSON_COLUMNS)
+    // memberId comes from conversationMembers (always present); profiles is
+    // left-joined so its userId column is nullable and can't back GroupMember.userId.
+    .select({ ...PERSON_COLUMNS, memberId: conversationMembers.userId })
     .from(conversationMembers)
     .leftJoin(profiles, eq(profiles.userId, conversationMembers.userId))
     .leftJoin(user, eq(user.id, conversationMembers.userId))
     .where(eq(conversationMembers.conversationId, conversationId))
 
   const members: GroupMember[] = memberRows.map((m) => ({
-    userId: m.userId,
+    userId: m.memberId,
     name: m.name ?? 'Aspira member',
     avatar: m.avatar ?? m.image ?? '',
   }))
