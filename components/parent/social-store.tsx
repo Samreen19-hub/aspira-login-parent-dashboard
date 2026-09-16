@@ -1,21 +1,26 @@
 "use client"
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
+import { createContext, useContext, useMemo, type ReactNode } from "react"
 import useSWR from "swr"
-import { SOCIAL_SPACES, type SocialSpace } from "@/lib/parent-data"
-import { createSpace, deleteSpace, getMyMemberships, joinSpace, leaveSpace } from "@/app/actions/spaces"
+import type { SocialSpace } from "@/lib/parent-data"
+import {
+  createSpace,
+  deleteSpace,
+  getMyMemberships,
+  joinSpace,
+  leaveSpace,
+  listSpaces,
+} from "@/app/actions/spaces"
 
 /**
- * Social store for Groups/Communities. Membership, following, and admin state
- * are the DATABASE's job now (via `app/actions/spaces.ts` on
- * `public.space_members`), loaded here through SWR — there is no localStorage
- * membership/following/admin store anymore.
- *
- * The only thing still kept client-side is the list of spaces the user has
- * CREATED. Space definitions (title/category/privacy/slug) have no server
- * persistence yet — and inventing one is out of scope — so a created space's
- * definition lives in localStorage while its membership (creator = admin) is
- * written to the database like every other membership.
+ * Social store for Groups/Communities. Everything is the DATABASE's job now:
+ *   - Space DEFINITIONS (existence + metadata) come from `public.spaces` via
+ *     `listSpaces` (server action), NOT from a hardcoded array or localStorage.
+ *   - Membership / following / admin state come from `public.space_members` via
+ *     `getMyMemberships`.
+ * Both are loaded through SWR so a created space survives refresh, logout/login,
+ * and appears on other devices/sessions. There is NO localStorage source of
+ * truth for whether a space exists anymore.
  */
 type SocialState = {
   spaces: SocialSpace[]
@@ -34,25 +39,15 @@ type SocialState = {
   refresh: () => Promise<unknown>
 }
 const SocialContext = createContext<SocialState | null>(null)
-// Only created-space DEFINITIONS are stored locally; membership lives in the DB.
-const CREATED_KEY = "aspira-parent-created-spaces"
 
 export function SocialStoreProvider({ children }: { children: ReactNode }) {
-  const [createdSpaces, setCreatedSpaces] = useState<SocialSpace[]>([])
-  const [createdHydrated, setCreatedHydrated] = useState(false)
-  useEffect(() => {
-    try {
-      const value = localStorage.getItem(CREATED_KEY)
-      if (value) setCreatedSpaces(JSON.parse(value))
-    } catch {} finally { setCreatedHydrated(true) }
-  }, [])
-  useEffect(() => { if (!createdHydrated) return; localStorage.setItem(CREATED_KEY, JSON.stringify(createdSpaces)) }, [createdHydrated, createdSpaces])
-
+  // The full set of spaces that EXIST, from the database (public.spaces).
+  const { data: dbSpaces, mutate: mutateSpaces } = useSWR("spaces", listSpaces, { revalidateOnFocus: false })
   // The signed-in user's live memberships (slug + role) from the database.
   const { data: memberships, mutate } = useSWR("space-memberships", getMyMemberships, { revalidateOnFocus: false })
 
   const value = useMemo<SocialState>(() => {
-    const spaces = [...createdSpaces, ...SOCIAL_SPACES]
+    const spaces = dbSpaces ?? []
     const rows = memberships ?? []
     const memberSlugs = rows.map((row) => row.slug)
     const adminSlugs = new Set(rows.filter((row) => row.role === "admin").map((row) => row.slug))
@@ -63,7 +58,7 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
       // group "joined" and community "following" checks in the UI.
       joined: memberSlugs,
       following: memberSlugs,
-      hydrated: createdHydrated && memberships !== undefined,
+      hydrated: dbSpaces !== undefined && memberships !== undefined,
       isAdmin: (slug: string) => adminSlugs.has(slug),
       // Join/leave a group. A sole-admin leave is rejected server-side (they must
       // transfer or delete via the detail page), so we just revalidate on failure.
@@ -76,24 +71,33 @@ export function SocialStoreProvider({ children }: { children: ReactNode }) {
         try { if (isMemberOf(slug)) await leaveSpace(slug); else await joinSpace(slug) } catch {}
         await mutate()
       },
-      // Create: persist the definition locally and record the creator as ADMIN
-      // in the database (auto-join + auto-admin), then revalidate memberships.
+      // Create: persist the space DEFINITION to public.spaces AND record the
+      // creator as ADMIN in public.space_members (both server-side, creator id
+      // taken from the session), then revalidate spaces + memberships so the new
+      // space is immediately resolvable (e.g. by the detail page we navigate to).
       addSpace: async (space: SocialSpace) => {
-        setCreatedSpaces((items) => (items.some((item) => item.slug === space.slug) ? items : [space, ...items]))
-        try { await createSpace(space.slug) } catch {}
-        await mutate()
+        try {
+          await createSpace({
+            slug: space.slug,
+            kind: space.kind,
+            title: space.title,
+            description: space.description,
+            category: space.category,
+            privacy: space.privacy,
+          })
+        } catch {}
+        await Promise.all([mutateSpaces(), mutate()])
       },
-      // Admin-only delete: remove every membership row for the space (enforced
-      // server-side) and drop the local definition if it was a created space.
+      // Admin-only delete: remove the space definition + every membership row
+      // (enforced server-side), then revalidate both lists.
       removeSpace: async (slug: string) => {
         try { await deleteSpace(slug) } catch {}
-        setCreatedSpaces((items) => items.filter((item) => item.slug !== slug))
-        await mutate()
+        await Promise.all([mutateSpaces(), mutate()])
       },
       getSpace: (slug: string) => spaces.find((space) => space.slug === slug),
       refresh: () => mutate(),
     }
-  }, [createdSpaces, createdHydrated, memberships, mutate])
+  }, [dbSpaces, memberships, mutate, mutateSpaces])
 
   return <SocialContext.Provider value={value}>{children}</SocialContext.Provider>
 }

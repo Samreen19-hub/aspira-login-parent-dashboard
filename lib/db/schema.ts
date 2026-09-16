@@ -259,6 +259,38 @@ export const spaceMembers = pgTable('space_members', {
 })
 
 /**
+ * Groups/Communities space DEFINITIONS (schema: public). ONE row = one space
+ * (a group or a community), identified by its unique `slug`. This is the source
+ * of truth for a space's EXISTENCE and metadata (title/category/description/
+ * privacy), replacing the previous hardcoded `SOCIAL_SPACES` + localStorage
+ * arrangement so a created space survives refresh, logout/login, and other
+ * devices. `kind` is `group | community` (singular, DB-canonical); the UI maps
+ * it to its plural `groups | communities` form.
+ *
+ * Membership/following/admin ownership stays in `public.space_members` and
+ * invitations in `public.space_invitations` — this table never duplicates them;
+ * it only records that the space itself exists. `created_by` is the
+ * authenticated Better Auth session user at creation time (never trusted from
+ * the browser) and is NULL for the seeded built-in spaces (system-owned).
+ * Following the existing Aspira convention this carries no foreign keys to
+ * `neon_auth.user`; it is provisioned lazily by `ensureSpacesTable`
+ * (see `lib/db/index.ts`). Uniqueness of `slug` is enforced by the
+ * `spaces_slug_unique` index so seeding/creating is idempotent.
+ */
+export const spaces = pgTable('spaces', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  slug: text('slug').notNull(),
+  kind: text('kind').notNull(),
+  title: text('title').notNull(),
+  category: text('category'),
+  description: text('description'),
+  privacy: text('privacy').notNull().default('Public'),
+  createdBy: uuid('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
  * Real pending invitations to a Groups/Communities space (schema: public). ONE
  * row = one user (`inviter_id`) invited another user (`invitee_id`) into a space
  * (`space_slug`). This sits ALONGSIDE `public.space_members` and never replaces
