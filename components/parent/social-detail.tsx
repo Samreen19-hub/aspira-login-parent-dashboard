@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import useSWR from "swr"
+import { useSession } from "@/lib/auth-client"
 import { ArrowLeft, Bell, BellOff, Check, Copy, Lock, LogOut, MoreHorizontal, Search, Settings, ShieldCheck, Trash2, UserMinus, UserPlus, Users } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -64,10 +65,14 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const record = getSpace(slug)
   const validSpace = !!record && record.kind === kind
 
+  // The signed-in user's session id scopes every per-user query below so a
+  // previous user's identity/roster/invites are never reused after login/logout.
+  const { data: session } = useSession()
+  const sessionUserId = session?.user?.id ?? null
   // The signed-in user's real identity (replaces the old hardcoded CURRENT_PARENT).
-  const { data: me } = useSWR("me", getMe, { revalidateOnFocus: false })
+  const { data: me } = useSWR(sessionUserId ? ["me", sessionUserId] : null, () => getMe(), { revalidateOnFocus: false })
   // Live counts + the viewer's own membership/admin flags for this space (any viewer).
-  const { data: spaceState, mutate: mutateState } = useSWR(validSpace ? ["space-state", slug] : null, () => fetchSpaceState(slug), { revalidateOnFocus: false })
+  const { data: spaceState, mutate: mutateState } = useSWR(validSpace && sessionUserId ? ["space-state", sessionUserId, slug] : null, () => fetchSpaceState(slug), { revalidateOnFocus: false })
 
   const isJoined = joined.includes(slug)
   const isFollowing = following.includes(slug)
@@ -77,10 +82,10 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
   const hasFullAccess = admin || isMember
 
   // The real roster — loaded only for viewers with full access (members/followers/admins).
-  const { data: memberRows, mutate: mutateMembers } = useSWR(validSpace && hasFullAccess ? ["space-members", slug] : null, () => getSpaceMembers(slug), { revalidateOnFocus: false })
+  const { data: memberRows, mutate: mutateMembers } = useSWR(validSpace && hasFullAccess && sessionUserId ? ["space-members", sessionUserId, slug] : null, () => getSpaceMembers(slug), { revalidateOnFocus: false })
   // Real pending invitations for this space (DB-backed, replaces the old dummy
   // local `invited` state). Same audience as the roster.
-  const { data: pendingRows, mutate: mutateInvites } = useSWR(validSpace && hasFullAccess ? ["space-invites", slug] : null, () => getPendingSpaceInvitations(slug), { revalidateOnFocus: false })
+  const { data: pendingRows, mutate: mutateInvites } = useSWR(validSpace && hasFullAccess && sessionUserId ? ["space-invites", sessionUserId, slug] : null, () => getPendingSpaceInvitations(slug), { revalidateOnFocus: false })
 
   useEffect(() => {
     const id = readPostFocus()
@@ -187,7 +192,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
                 </div>
                 <h1 className="mt-2 font-display text-2xl font-bold text-balance">{record.title}</h1>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground text-pretty">{record.description}</p>
-                <p className="mt-2 flex items-center gap-1.5 text-sm font-medium text-muted-foreground"><Users className="size-4" />{memberCount} members</p>
+                <p className="mt-2 flex items-center gap-1.5 text-sm font-medium text-muted-foreground"><Users className="size-4" />{memberCount} {isGroup ? "members" : "followers"}</p>
               </div>
             </div>
           </div>
@@ -297,7 +302,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
                 </div>
                 <h1 className="mt-2 font-display text-2xl font-bold text-balance">{record.title}</h1>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground text-pretty">{record.description}</p>
-                <p className="mt-2 flex items-center gap-1.5 text-sm font-medium text-muted-foreground"><Users className="size-4" />{memberCount} members</p>
+                <p className="mt-2 flex items-center gap-1.5 text-sm font-medium text-muted-foreground"><Users className="size-4" />{memberCount} {isGroup ? "members" : "followers"}</p>
               </div>
             </div>
             <div className="relative flex shrink-0 flex-wrap items-center gap-2">
@@ -370,7 +375,7 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
           {hasFullAccess && (
           <Card>
             <CardHeader className="flex flex-row items-center justify-between gap-2">
-              <CardTitle className="font-display text-base">Members</CardTitle>
+              <CardTitle className="font-display text-base">{isGroup ? "Members" : "Followers"}</CardTitle>
               <Badge variant="secondary" className="bg-brand-muted text-brand">{memberCount}</Badge>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
@@ -405,11 +410,11 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
                 </div>
               ))}
               <div className="mt-1 grid gap-2">
-                <Button variant="outline" className="w-full rounded-xl" onClick={() => setMembersOpen(true)}><Users data-icon="inline-start" />{admin ? "Manage members" : "View all members"}</Button>
+                <Button variant="outline" className="w-full rounded-xl" onClick={() => setMembersOpen(true)}><Users data-icon="inline-start" />{admin ? (isGroup ? "Manage members" : "Manage followers") : (isGroup ? "View all members" : "View all followers")}</Button>
                 {/* Inviting is available to every member/follower (and admins). This whole card is
                     rendered only when hasFullAccess is true, so non-members/non-followers never
                     reach it — matching the group/community invite permission rules. */}
-                <Button className="w-full rounded-xl" onClick={() => setInviteOpen(true)}><UserPlus data-icon="inline-start" />Invite members</Button>
+                <Button className="w-full rounded-xl" onClick={() => setInviteOpen(true)}><UserPlus data-icon="inline-start" />{isGroup ? "Invite members" : "Invite followers"}</Button>
               </div>
             </CardContent>
           </Card>
@@ -425,8 +430,8 @@ export function SocialDetail({ kind, slug }: { kind: "groups" | "communities"; s
         </div>
       </div>
 
-      <InviteMembersDialog open={inviteOpen} onOpenChange={setInviteOpen} slug={slug} spaceTitle={record.title} onInvited={async () => { await mutateInvites() }} />
-      <ViewAllMembersDialog open={membersOpen} onOpenChange={setMembersOpen} spaceTitle={record.title} members={members} invitedContacts={pendingInvites.map((invite) => invite.name)} myUserId={myUserId} canManage={admin} onRequestRemove={(member) => setRemoveTarget(member)} onRequestMakeAdmin={(member) => setMakeAdminTarget(member)} />
+      <InviteMembersDialog open={inviteOpen} onOpenChange={setInviteOpen} slug={slug} spaceTitle={record.title} isGroup={isGroup} onInvited={async () => { await mutateInvites() }} />
+      <ViewAllMembersDialog open={membersOpen} onOpenChange={setMembersOpen} spaceTitle={record.title} isGroup={isGroup} members={members} invitedContacts={pendingInvites.map((invite) => invite.name)} myUserId={myUserId} canManage={admin} onRequestRemove={(member) => setRemoveTarget(member)} onRequestMakeAdmin={(member) => setMakeAdminTarget(member)} />
       {admin && <DeleteSpaceDialog open={deleteOpen} onOpenChange={setDeleteOpen} isGroup={isGroup} memberCount={memberCount} onConfirm={handleDelete} />}
       {admin && <RemoveMemberDialog open={removeTarget !== null} onOpenChange={(value) => { if (!value) setRemoveTarget(null) }} isGroup={isGroup} memberName={removeTarget?.name ?? ""} onConfirm={handleConfirmRemove} />}
       {admin && <MakeAdminDialog open={makeAdminTarget !== null} onOpenChange={(value) => { if (!value) setMakeAdminTarget(null) }} isGroup={isGroup} memberName={makeAdminTarget?.name ?? ""} onConfirm={handleConfirmMakeAdmin} />}
@@ -563,7 +568,7 @@ function LeaveSpaceDialog({ open, onOpenChange, isGroup, mustTransfer, candidate
 // "already invited" bookkeeping. Selecting people and sending persists real
 // `pending` rows via `inviteToSpace`; `onInvited` revalidates the parent's
 // pending-invitation view. Used for BOTH Groups and Communities.
-function InviteMembersDialog({ open, onOpenChange, slug, spaceTitle, onInvited }: { open: boolean; onOpenChange: (open: boolean) => void; slug: string; spaceTitle: string; onInvited: () => void | Promise<void> }) {
+function InviteMembersDialog({ open, onOpenChange, slug, spaceTitle, isGroup, onInvited }: { open: boolean; onOpenChange: (open: boolean) => void; slug: string; spaceTitle: string; isGroup: boolean; onInvited: () => void | Promise<void> }) {
   const [query, setQuery] = useState("")
   const [selected, setSelected] = useState<string[]>([])
   const [sending, setSending] = useState(false)
@@ -586,7 +591,7 @@ function InviteMembersDialog({ open, onOpenChange, slug, spaceTitle, onInvited }
     <Dialog open={open} onOpenChange={(value) => { if (!value) { setSelected([]); setQuery("") } onOpenChange(value) }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Invite members</DialogTitle>
+          <DialogTitle>{isGroup ? "Invite members" : "Invite followers"}</DialogTitle>
           <DialogDescription>Search your network and invite them to {spaceTitle}.</DialogDescription>
         </DialogHeader>
         <div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search people..." className="h-11 rounded-xl pl-9" aria-label="Search people to invite" /></div>
@@ -618,12 +623,12 @@ function InviteMembersDialog({ open, onOpenChange, slug, spaceTitle, onInvited }
 // Admin identification (the Admin badge) is shown to everyone. When `canManage` is set (admin),
 // each eligible member/follower also gets "Make Admin" and Remove actions. The signed-in user
 // (badged "You") can never be removed here — self-exit uses Leave/Unfollow.
-function ViewAllMembersDialog({ open, onOpenChange, spaceTitle, members, invitedContacts, myUserId, canManage, onRequestRemove, onRequestMakeAdmin }: { open: boolean; onOpenChange: (open: boolean) => void; spaceTitle: string; members: SpaceMember[]; invitedContacts: string[]; myUserId: string | null; canManage?: boolean; onRequestRemove?: (member: SpaceMember) => void; onRequestMakeAdmin?: (member: SpaceMember) => void }) {
+function ViewAllMembersDialog({ open, onOpenChange, spaceTitle, isGroup, members, invitedContacts, myUserId, canManage, onRequestRemove, onRequestMakeAdmin }: { open: boolean; onOpenChange: (open: boolean) => void; spaceTitle: string; isGroup: boolean; members: SpaceMember[]; invitedContacts: string[]; myUserId: string | null; canManage?: boolean; onRequestRemove?: (member: SpaceMember) => void; onRequestMakeAdmin?: (member: SpaceMember) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Members of {spaceTitle}</DialogTitle>
+          <DialogTitle>{isGroup ? "Members" : "Followers"} of {spaceTitle}</DialogTitle>
           <DialogDescription>{canManage ? "Manage who has access to this space." : "Everyone in this space."}</DialogDescription>
         </DialogHeader>
         <ul className="max-h-80 space-y-1 overflow-y-auto">

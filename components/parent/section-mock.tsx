@@ -6,6 +6,7 @@ import Link from "next/link"
 import useSWR from "swr"
 import useSWRInfinite from "swr/infinite"
 import { getSpaceCounts, getInviteableUsers, getConnectionInviteableUsers, inviteToSpace, listSpacesPage, type SpaceScope } from "@/app/actions/spaces"
+import { useSession } from "@/lib/auth-client"
 import { Bell, BookOpen, Check, Globe2, Heart, Layers3, MessageCircle, Search, Users, UserPlus } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -59,8 +60,14 @@ function SocialSection({ kind }: { kind: SocialKind }) {
   // THEMSELVES are paginated from the DB (never the full store array), so the
   // browser only ever holds the pages actually viewed.
   const { joined, toggleJoined, following, toggleFollowing } = useSocialStore()
+  // Every listing query is scoped to the signed-in user's id so a previous
+  // user's cached spaces/counts are never reused after login/logout. Until the
+  // session resolves (userId null) the keys are null, so nothing is fetched and
+  // no stale results from another user/session are shown.
+  const { data: session } = useSession()
+  const userId = session?.user?.id ?? null
   // Member/follower counts come from the DB (public.space_members), never a static number.
-  const { data: counts, mutate: mutateCounts } = useSWR("space-counts", getSpaceCounts, { revalidateOnFocus: false })
+  const { data: counts, mutate: mutateCounts } = useSWR(userId ? ["space-counts", userId] : null, () => getSpaceCounts(), { revalidateOnFocus: false })
   const isGroups = kind === "groups"
   const Icon = isGroups ? Users : Globe2
   // `all` = eligible discovery (groups) / every public community; `mine` =
@@ -78,16 +85,20 @@ function SocialSection({ kind }: { kind: SocialKind }) {
   // predicates. Each page fetches `limit + 1` rows so `hasMore` needs no count.
   const { data, size, setSize, isValidating, mutate } = useSWRInfinite(
     (index, previous: { items: SocialSpace[]; hasMore: boolean } | null) => {
+      // No session yet → no key → no fetch, so a signed-out/loading state never
+      // renders the previous user's discovery pages.
+      if (!userId) return null
       if (previous && !previous.hasMore) return null
-      return ["spaces-page", kind, scope, activeFilter, debouncedQuery, index] as const
+      return ["spaces-page", userId, kind, scope, activeFilter, debouncedQuery, index] as const
     },
-    ([, k, s, category, search, index]) =>
+    ([, , k, s, category, search, index]) =>
       listSpacesPage({ kind: k, scope: s, category, search, limit: PAGE_SIZE, offset: index * PAGE_SIZE }),
     { revalidateOnFocus: false, revalidateFirstPage: false },
   )
 
-  // Any filter/scope change collapses discovery back to the first page.
-  useEffect(() => { setSize(1) }, [kind, scope, activeFilter, debouncedQuery, setSize])
+  // Any user/filter/scope change collapses discovery back to the first page so a
+  // stale later page from the previous state is never shown.
+  useEffect(() => { setSize(1) }, [userId, kind, scope, activeFilter, debouncedQuery, setSize])
 
   const pages = data ?? []
   const items = pages.flatMap((page) => page.items)
@@ -129,7 +140,7 @@ function SocialSection({ kind }: { kind: SocialKind }) {
         </>
       ) : <Card className="border-dashed"><CardContent className="flex flex-col items-center gap-2 p-12 text-center"><Layers3 className="size-8 text-muted-foreground" /><p className="font-semibold">{mineOnly ? (isGroups ? "You haven't joined any groups yet" : "You're not following any communities yet") : "Nothing matches that search"}</p><p className="text-sm text-muted-foreground">{mineOnly ? (isGroups ? "Join a group to see it here." : "Follow a community to see it here.") : "Try another keyword or reset your filter."}</p><Button variant="outline" className="mt-2 rounded-xl" onClick={() => { setQuery(""); setActiveFilter("All"); setMineOnly(false) }}>{mineOnly ? "Browse all" : "Clear filters"}</Button></CardContent></Card>}
     </div>
-    <CreateSpaceDialog open={createOpen} onOpenChange={setCreateOpen} kind={kind} />
+    <CreateSpaceDialog open={createOpen} onOpenChange={setCreateOpen} kind={kind} onCreated={async () => { await Promise.all([mutate(), mutateCounts()]) }} />
   </PageShell>
 }
 
@@ -152,7 +163,7 @@ function SocialCard({ space, memberCount, isJoined, isFollowing, onToggle }: { s
   return <Card className="border-border/80 transition-shadow hover:shadow-md"><Link href={detailHref} className="block"><CardHeader className="flex flex-row items-start gap-3"><span className={`grid size-12 shrink-0 place-items-center rounded-2xl text-sm font-bold ${space.tone}`}>{space.initials}</span><div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><CardTitle className="font-display text-lg leading-tight">{space.title}</CardTitle><Badge variant="secondary" className="shrink-0 bg-muted text-muted-foreground">{space.category}</Badge></div><CardDescription className="mt-1 flex items-center gap-1.5"><Users className="size-3.5" />{memberCount} {isGroups ? "members" : "followers"}</CardDescription></div></CardHeader></Link><CardContent><p className="text-sm leading-6 text-muted-foreground">{space.description}</p></CardContent><CardFooter className="flex flex-col items-stretch gap-2 border-t bg-muted/20 pt-4"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-3 text-xs text-muted-foreground"><span className="flex items-center gap-1"><MessageCircle className="size-3.5" />Active discussions</span><span className="flex items-center gap-1"><Bell className="size-3.5" />Updates</span></div><Button size="sm" variant={active ? "secondary" : "default"} className="rounded-xl" disabled={pending} onClick={handleToggle}>{active ? <><Check data-icon="inline-start" />{isGroups ? "Joined" : "Following"}</> : <><UserPlus data-icon="inline-start" />{isGroups ? "Join" : "Follow"}</>}</Button></div>{error && <p role="alert" className="text-xs leading-5 text-destructive">{error}</p>}</CardFooter></Card>
 }
 
-function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpenChange: (open: boolean) => void; kind: SocialKind }) {
+function CreateSpaceDialog({ open, onOpenChange, kind, onCreated }: { open: boolean; onOpenChange: (open: boolean) => void; kind: SocialKind; onCreated?: () => void | Promise<void> }) {
   const router = useRouter()
   const { addSpace } = useSocialStore()
   const isGroups = kind === "groups"
@@ -223,6 +234,9 @@ function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpen
     // `pending` in space_invitations until each user actually joins/accepts. Only invite-only
     // groups and communities ever carry invitees here.
     if (invitees.length) { try { await inviteToSpace(finalSlug, invitees) } catch {} }
+    // Revalidate the current user's listing (pages + counts) so returning to the
+    // explorer shows the new space instead of a stale cached page.
+    await onCreated?.()
     reset()
     onOpenChange(false)
     router.push(`/parent/${kind}/${finalSlug}`)
@@ -239,8 +253,13 @@ function CreateSpaceDialog({ open, onOpenChange, kind }: { open: boolean; onOpen
           <div className="grid gap-2"><Label htmlFor="space-name">{isGroups ? "Group" : "Community"} name</Label><Input id="space-name" value={name} onChange={(event) => setName(event.target.value)} placeholder={isGroups ? "e.g. Class 6 Parents" : "e.g. Young Scientists"} /></div>
           <div className="grid gap-2"><Label htmlFor="space-desc">Description</Label><Textarea id="space-desc" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What is this space about?" /></div>
           <div className="grid gap-2"><Label>Category</Label><div className="flex flex-wrap gap-2">{categories.map((option) => <Button key={option} type="button" size="sm" variant={category === option ? "default" : "outline"} className="rounded-xl" onClick={() => setCategory(option)}>{option}</Button>)}</div></div>
-          {isGroups && <div className="grid gap-2"><Label>Who can join</Label><div className="flex flex-wrap gap-2">{([["anyone", "Anyone"], ["connections", "My connections"], ["invite", "Invite only"]] as const).map(([value, label]) => <Button key={value} type="button" size="sm" variant={joinPolicy === value ? "default" : "outline"} className="rounded-xl" onClick={() => setJoinPolicy(value)}>{label}</Button>)}</div><p className="text-xs text-muted-foreground">{joinPolicy === "anyone" ? "Any parent can find and join this group." : joinPolicy === "connections" ? "Only your accepted connections can join this group." : "Only people you invite can join this group."}</p></div>}
-          <div className="grid gap-2"><Label>Invite members <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label><ul className="max-h-40 space-y-1 overflow-y-auto rounded-xl border border-border p-1">{people === undefined ? <li className="p-3 text-sm text-muted-foreground">Loading members…</li> : people.length === 0 ? <li className="p-3 text-sm text-muted-foreground">No other members to invite yet.</li> : people.map((person) => { const selected = invitees.includes(person.userId); return <li key={person.userId}><button type="button" onClick={() => toggleInvitee(person.userId)} className="flex w-full items-center gap-3 rounded-lg p-2 text-left hover:bg-secondary"><Avatar className="size-8"><AvatarImage src={person.avatar || "/placeholder.svg"} alt={person.name} /><AvatarFallback>{initialsOf(person.name)}</AvatarFallback></Avatar><span className="min-w-0 flex-1 truncate text-sm font-medium">{person.name}</span><span className={`grid size-5 place-items-center rounded-full border ${selected ? "border-brand bg-brand text-brand-foreground" : "border-input"}`}>{selected && <Check className="size-3.5" />}</span></button></li> })}</ul></div>
+          {isGroups && <div className="grid gap-2"><Label>Who can join</Label><div className="flex flex-wrap gap-2">{([["anyone", "Anyone"], ["connections", "My connections"], ["invite", "Invite only"]] as const).map(([value, label]) => <Button key={value} type="button" size="sm" variant={joinPolicy === value ? "default" : "outline"} className="rounded-xl" onClick={() => selectPolicy(value)}>{label}</Button>)}</div><p className="text-xs text-muted-foreground">{joinPolicy === "anyone" ? "Any parent can find and join this group." : joinPolicy === "connections" ? "Only your accepted connections can join this group." : "Only people you invite can join this group."}</p></div>}
+          {/* The invite picker is rendered ONLY when the space's own rules need it:
+              invite-only GROUPS (connections picker) and COMMUNITIES (optional
+              sharing). For `anyone`/`my connections` groups showInvite is false,
+              so there is no heading, no "(optional)", and — because the query key
+              stays null — no fetch and never a "Loading members…" flash. */}
+          {showInvite && <div className="grid gap-2"><Label>Invite members <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label><ul className="max-h-40 space-y-1 overflow-y-auto rounded-xl border border-border p-1">{people === undefined ? <li className="p-3 text-sm text-muted-foreground">Loading members…</li> : people.length === 0 ? <li className="p-3 text-sm text-muted-foreground">No other members to invite yet.</li> : people.map((person) => { const selected = invitees.includes(person.userId); return <li key={person.userId}><button type="button" onClick={() => toggleInvitee(person.userId)} className="flex w-full items-center gap-3 rounded-lg p-2 text-left hover:bg-secondary"><Avatar className="size-8"><AvatarImage src={person.avatar || "/placeholder.svg"} alt={person.name} /><AvatarFallback>{initialsOf(person.name)}</AvatarFallback></Avatar><span className="min-w-0 flex-1 truncate text-sm font-medium">{person.name}</span><span className={`grid size-5 place-items-center rounded-full border ${selected ? "border-brand bg-brand text-brand-foreground" : "border-input"}`}>{selected && <Check className="size-3.5" />}</span></button></li> })}</ul></div>}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>

@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useMemo, type ReactNode } from "react"
 import useSWR from "swr"
+import { useSession } from "@/lib/auth-client"
 import type { SocialSpace } from "@/lib/parent-data"
 import {
   createSpace,
@@ -44,10 +45,16 @@ type SocialState = {
 const SocialContext = createContext<SocialState | null>(null)
 
 export function SocialStoreProvider({ children }: { children: ReactNode }) {
+  // Every listing/membership query is SCOPED to the signed-in user's id so a
+  // different user's cached spaces are never reused after login/logout. Until
+  // the session resolves (userId null) the keys are null, so nothing is fetched
+  // and no previous user's data can be shown.
+  const { data: session } = useSession()
+  const userId = session?.user?.id ?? null
   // The full set of spaces that EXIST, from the database (public.spaces).
-  const { data: dbSpaces, mutate: mutateSpaces } = useSWR("spaces", listSpaces, { revalidateOnFocus: false })
+  const { data: dbSpaces, mutate: mutateSpaces } = useSWR(userId ? ["spaces", userId] : null, () => listSpaces(), { revalidateOnFocus: false })
   // The signed-in user's live memberships (slug + role) from the database.
-  const { data: memberships, mutate } = useSWR("space-memberships", getMyMemberships, { revalidateOnFocus: false })
+  const { data: memberships, mutate } = useSWR(userId ? ["space-memberships", userId] : null, () => getMyMemberships(), { revalidateOnFocus: false })
 
   const value = useMemo<SocialState>(() => {
     const spaces = dbSpaces ?? []
