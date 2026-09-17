@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import Image from "next/image"
-import { Heart, MessageCircle, Share2, Bookmark, MoreHorizontal, Globe, Smile, Camera, Send, Copy, Users, MessageSquare, Trophy, Sparkles, Leaf, CalendarDays, Clock3, MapPin, Star } from "lucide-react"
+import { Heart, MessageCircle, Share2, Bookmark, MoreHorizontal, Globe, UsersRound, Smile, Camera, Send, Copy, Users, MessageSquare, Trophy, Sparkles, Leaf, CalendarDays, Clock3, MapPin, Star } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge"
 import type { FeedPost } from "@/lib/parent-data"
 import { eventDisplayDate } from "@/lib/parent-data"
 import { useFeedStore, type RsvpFlags } from "@/components/parent/feed-store"
+import { useSocialStore } from "@/components/parent/social-store"
 import { EventRsvpBar } from "@/components/parent/event-rsvp-bar"
 import { toggleLike, addComment as addCommentAction, votePoll } from "@/app/actions/posts"
 import { MAX_COMMENT_LENGTH } from "@/lib/validation"
@@ -41,6 +42,22 @@ function initialsOf(name: string) {
 
 export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBacked = false, eventRsvp, readOnly = false }: { post: FeedPost; onHide?: () => void; onDelete?: () => void; onOpen?: () => void; savedView?: boolean; serverBacked?: boolean; eventRsvp?: EventRsvpControls; readOnly?: boolean }) {
   const { savedIds, toggleSaved } = useFeedStore()
+  const { getSpace } = useSocialStore()
+  // Scoped Group/Community presentation. The Group vs Community distinction is
+  // resolved from the actual space kind (via the post's scope slug), NOT from
+  // the post text/author or the stored `visibility` (which DB-backed scoped
+  // posts always persist as "Group"). Unscoped posts and any post whose space
+  // can't be resolved fall back to the original globe + `post.visibility`.
+  const scopeSpace = post.scope ? getSpace(post.scope) : undefined
+  const isCommunityScope = scopeSpace?.kind === "communities"
+  const isGroupScope = scopeSpace?.kind === "groups"
+  const isScoped = isCommunityScope || isGroupScope
+  const ScopeIcon = isGroupScope ? UsersRound : Globe
+  const scopeLabel = isCommunityScope ? "Community" : isGroupScope ? "Group" : post.visibility
+  // Communities relate via "Follower"; Groups keep "Member". Only the leading
+  // relationship token of the subtitle is swapped, preserving the space name.
+  const relationship = isCommunityScope ? "Follower" : "Member"
+  const displaySubtitle = isScoped ? post.subtitle.replace(/^[^·]*·/, `${relationship} ·`) : post.subtitle
   const [liked, setLiked] = useState(post.likedByMe ?? false)
   const [likeCount, setLikeCount] = useState(post.likes)
   const saved = savedIds.includes(post.id)
@@ -187,12 +204,12 @@ export function PostCard({ post, onHide, onDelete, onOpen, savedView, serverBack
               {post.role}
             </Badge>
           </div>
-          <p className="truncate text-sm text-muted-foreground">{post.subtitle}</p>
+          <p className="truncate text-sm text-muted-foreground">{displaySubtitle}</p>
           <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
             <span>{post.time}</span>
             <span>·</span>
-            <Globe className="size-3" />
-            <span>{post.visibility}</span>
+            <ScopeIcon className="size-3" />
+            <span>{scopeLabel}</span>
           </div>
         </div>
         <button
