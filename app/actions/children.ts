@@ -5,7 +5,7 @@ import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 import { auth } from '@/lib/auth'
 import { db, ensureParentChildTable } from '@/lib/db'
-import { parentChild, parentChildSeeds, profiles } from '@/lib/db/schema'
+import { parentChild } from '@/lib/db/schema'
 import type { Child } from '@/lib/parent-data'
 
 /**
@@ -70,60 +70,10 @@ function toChild(row: ChildRow): Child {
   }
 }
 
-/**
- * The demo parent who owns the built-in children. Only this parent inherits
- * Aarav/Saanvi; every other parent starts with an empty roster (and sees the
- * Add Child empty state).
- */
-const DEMO_PARENT_NAME = 'Rashi Kapoor'
-const SEED_CHILDREN: Omit<ChildInput, never>[] = [
-  { name: 'Aarav Kapoor', className: 'Class 6', school: 'Greenfield Public School', avatar: '/avatar-aarav.png', relationship: 'Child' },
-  { name: 'Saanvi Kapoor', className: 'Class 3', school: 'Delhi Public School', avatar: '/avatar-saanvi.png', relationship: 'Child' },
-]
-
-/**
- * One-time, race-safe seed of the built-in demo children for the demo parent.
- *
- * Guards, in order:
- *  1. Only the demo parent (profile name === DEMO_PARENT_NAME) is ever seeded —
- *     so unrelated parents are never given Aarav/Saanvi.
- *  2. Claiming the `parent_child_seeds` marker (PK insert, `onConflictDoNothing`)
- *     succeeds exactly once per parent — so a refresh never duplicates them and
- *     deleting a seeded child never brings it back.
- */
-async function ensureSeeded(parentId: string): Promise<void> {
-  const [profile] = await db
-    .select({ name: profiles.name })
-    .from(profiles)
-    .where(eq(profiles.userId, parentId))
-    .limit(1)
-  if (!profile || profile.name !== DEMO_PARENT_NAME) return
-
-  const claim = await db
-    .insert(parentChildSeeds)
-    .values({ parentUserId: parentId })
-    .onConflictDoNothing()
-    .returning({ parentUserId: parentChildSeeds.parentUserId })
-  if (claim.length === 0) return
-
-  await db.insert(parentChild).values(
-    SEED_CHILDREN.map((child) => ({
-      parentUserId: parentId,
-      status: 'unlinked',
-      name: child.name,
-      className: child.className,
-      school: child.school,
-      relationship: child.relationship ?? 'Child',
-      avatar: child.avatar ?? '/placeholder.svg',
-    })),
-  )
-}
-
 /** The signed-in parent's children, oldest first. Source of truth for the UI. */
 export async function listChildren(): Promise<Child[]> {
   const meId = await getUserId()
   await ensureParentChildTable()
-  await ensureSeeded(meId)
 
   const rows = await db
     .select()
@@ -143,7 +93,6 @@ export async function getParentChild(childId: string): Promise<Child | null> {
   const meId = await getUserId()
   if (!isUuid(childId)) return null
   await ensureParentChildTable()
-  await ensureSeeded(meId)
 
   const [row] = await db
     .select()
