@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useRef, useState, type ChangeEvent } from "react"
-import { GraduationCap, School, TrendingUp, Plus, MoreVertical, Pencil, Trash2, Camera, X } from "lucide-react"
+import { GraduationCap, School, Plus, MoreVertical, Pencil, Trash2, Camera, X } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -23,7 +23,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { PageShell } from "@/components/parent/page-shell"
-import { ProgressRing } from "@/components/parent/progress-ring"
 import { useChildrenStore } from "@/components/parent/children-store"
 import type { Child } from "@/lib/parent-data"
 
@@ -87,7 +86,7 @@ export default function ChildrenPage() {
       avatar: form.avatar || "/placeholder.svg",
     }
     if (editing === "add") {
-      addChild({ id: `child-${Date.now()}`, progress: 0, ...shared })
+      addChild({ id: `child-${Date.now()}`, ...shared })
     } else if (editing) {
       updateChild(editing, shared)
     }
@@ -101,7 +100,7 @@ export default function ChildrenPage() {
   }
 
   return (
-    <PageShell title="My Children" description="Track progress and manage your children's accounts.">
+    <PageShell title="My Children" description="Manage your children's accounts.">
       <div className="grid gap-4 sm:grid-cols-2">
         {children.map((child) => (
           <Card key={child.id} className="gap-4 p-5">
@@ -122,7 +121,6 @@ export default function ChildrenPage() {
                 </div>
               </div>
               <div className="flex items-center gap-1">
-                <ProgressRing value={child.progress} size={56} />
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     render={
@@ -141,12 +139,6 @@ export default function ChildrenPage() {
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
-            </div>
-            <div className="flex items-center gap-2 rounded-xl bg-brand-muted px-3 py-2.5 text-sm text-brand">
-              <TrendingUp className="size-4" />
-              <span className="font-medium">
-                {child.progress ? `${child.progress}% overall performance this term` : "New child profile added"}
-              </span>
             </div>
             <div className="flex gap-2">
               <Button

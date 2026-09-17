@@ -9,7 +9,6 @@ export interface Child {
   className: string
   school: string
   avatar: string
-  progress: number
   online?: boolean
   /** Optional date of birth (YYYY-MM-DD), captured in the add/edit child flow. */
   dob?: string
@@ -189,7 +188,6 @@ export const CHILDREN: Child[] = [
     className: 'Class 6',
     school: 'Greenfield Public School',
     avatar: '/avatar-aarav.png',
-    progress: 92,
     online: true,
   },
   {
@@ -198,7 +196,6 @@ export const CHILDREN: Child[] = [
     className: 'Class 3',
     school: 'Delhi Public School',
     avatar: '/avatar-saanvi.png',
-    progress: 88,
     online: true,
   },
 ]

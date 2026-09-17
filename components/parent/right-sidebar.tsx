@@ -5,7 +5,6 @@ import { CalendarClock, CalendarDays, FlaskConical, FileText, Plus } from 'lucid
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { ProgressRing } from '@/components/parent/progress-ring'
 import { useChildrenStore } from '@/components/parent/children-store'
 import { useSchoolUpdatesStore } from '@/components/parent/school-updates-store'
 import { UPCOMING_EVENTS } from '@/lib/parent-data'
@@ -64,7 +63,6 @@ export function RightSidebar() {
                 <p className="text-xs text-muted-foreground">{child.className}</p>
                 <p className="truncate text-xs text-muted-foreground">{child.school}</p>
               </div>
-              <ProgressRing value={child.progress} />
             </Link>
           ))}
         </div>
