@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react"
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
-import useSWR from "swr"
 import {
   ArrowLeft,
   CalendarDays,
@@ -11,11 +10,13 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  GraduationCap,
   Info,
   CalendarX2,
-  Loader2,
+  School,
 } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import {
@@ -26,20 +27,45 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { useChildrenStore } from "@/components/parent/children-store"
 import {
-  WEEKDAYS,
-  dateForWeekday,
-  formatDate,
-  formatWeekRange,
-  getChildTimetable,
+  getDemoInstitutions,
   getSubjectMeta,
-  startOfWeek,
-  weekKey,
-  type TimetableEntry,
-} from "@/lib/timetable-data"
+  type DemoClass,
+  type DemoInstitution,
+  type WeekdayName,
+} from "@/lib/demo-academics"
 
 /* -------------------------------------------------------------------------- */
-/*  School-hours helpers (derived from the day's entries)                      */
+/*  Date + school-hours helpers                                                */
 /* -------------------------------------------------------------------------- */
+
+/** Weekday name for a Date's `getDay()` index (0 = Sunday). Weekends are null. */
+const WEEKDAY_BY_INDEX: (WeekdayName | null)[] = [
+  null, // Sunday
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  null, // Saturday
+]
+
+/** Monday-first column headers for the month grid. */
+const DOW_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+]
 
 /** Parse a human time like "8:00 AM" into minutes since midnight. */
 function timeToMinutes(time: string): number {
@@ -51,14 +77,41 @@ function timeToMinutes(time: string): number {
   return hours * 60 + minutes
 }
 
-/** School hours for a day, e.g. "8:00 AM – 3:00 PM", computed from its entries. */
-function schoolHours(entries: TimetableEntry[]): string {
-  if (!entries.length) return ""
-  const starts = entries.map((entry) => timeToMinutes(entry.start))
-  const ends = entries.map((entry) => timeToMinutes(entry.end))
-  const first = entries[starts.indexOf(Math.min(...starts))].start
-  const last = entries[ends.indexOf(Math.max(...ends))].end
+/** School/college hours for a day, e.g. "8:00 AM – 11:25 AM", from its classes. */
+function dayHours(classes: DemoClass[]): string {
+  if (!classes.length) return ""
+  const starts = classes.map((c) => timeToMinutes(c.start))
+  const ends = classes.map((c) => timeToMinutes(c.end))
+  const first = classes[starts.indexOf(Math.min(...starts))].start
+  const last = classes[ends.indexOf(Math.max(...ends))].end
   return `${first} – ${last}`
+}
+
+function isSameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+  )
+}
+
+/** Build the Monday-first weeks (each 7 days) overlapping the given month. */
+function buildMonthMatrix(viewDate: Date): Date[][] {
+  const year = viewDate.getFullYear()
+  const month = viewDate.getMonth()
+  const first = new Date(year, month, 1)
+  const mondayOffset = (first.getDay() + 6) % 7 // 0 = Monday … 6 = Sunday
+  const cursor = new Date(year, month, 1 - mondayOffset)
+  const lastDay = new Date(year, month + 1, 0)
+
+  const weeks: Date[][] = []
+  while (cursor <= lastDay) {
+    const week: Date[] = []
+    for (let d = 0; d < 7; d++) {
+      week.push(new Date(cursor))
+      cursor.setDate(cursor.getDate() + 1)
+    }
+    weeks.push(week)
+  }
+  return weeks
 }
 
 /* -------------------------------------------------------------------------- */
@@ -66,57 +119,25 @@ function schoolHours(entries: TimetableEntry[]): string {
 /* -------------------------------------------------------------------------- */
 
 export function TimetableView() {
-  // Children come from the shared, persisted store so newly added children appear here too.
+  // Children come from the shared, DB-backed store so newly added children appear here too.
   const { children } = useChildrenStore()
-  // When navigating in from a specific child (e.g. My Children → Timetable), that child's id
-  // arrives as `?childId=`. Seed the initial selection from it so the page opens on that child
-  // instead of always defaulting to the first one. Manual selection still overrides it afterwards.
+  // When navigating in from a specific child (My Children → Timetable), that child's id arrives
+  // as `?childId=`. Seed the initial selection from it; manual selection overrides afterwards.
   const searchParams = useSearchParams()
   const initialChildId = searchParams.get("childId")
   const [selectedId, setSelectedId] = useState<string | null>(initialChildId)
-  // Track the Monday of the visible week; navigation shifts it by ±7 days.
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
 
-  // Resolve the selected child; fall back to the first child when nothing is selected or the
-  // selected/param id is not a valid child in the roster.
   const activeChild = children.find((child) => child.id === selectedId) ?? children[0]
-  const childId = activeChild?.id ?? ""
-  const key = weekKey(weekStart)
 
-  const { data, isLoading } = useSWR(
-    childId ? ["timetable", childId, key] : null,
-    () => getChildTimetable(childId, key),
-    { keepPreviousData: false },
+  // Timetable data is DEMO/UI-only and matched by child name (see lib/demo-academics).
+  const institutions = useMemo<DemoInstitution[]>(
+    () => (activeChild ? getDemoInstitutions(activeChild.name) : []),
+    [activeChild],
   )
-
-  function shiftWeek(deltaWeeks: number) {
-    setWeekStart((current) => {
-      const next = new Date(current)
-      next.setDate(next.getDate() + deltaWeeks * 7)
-      return startOfWeek(next)
-    })
-  }
-
-  const entriesByDay = useMemo(() => {
-    const map = new Map<string, TimetableEntry[]>()
-    for (const entry of data ?? []) {
-      const list = map.get(entry.day) ?? []
-      list.push(entry)
-      map.set(entry.day, list)
-    }
-    // Keep each day ordered by start time.
-    for (const list of map.values()) {
-      list.sort((a, b) => timeToMinutes(a.start) - timeToMinutes(b.start))
-    }
-    return map
-  }, [data])
-
-  const hasTimetable = Array.isArray(data) && data.length > 0
 
   return (
     <div className="mx-auto max-w-6xl">
-      {/* Heading — back arrow reuses the exact Groups/Communities back-navigation pattern
-          (Link + ArrowLeft size-4 + text-brand hover:underline), arrow only. */}
+      {/* Heading */}
       <div className="mb-6">
         <div className="flex items-center gap-2">
           <Link
@@ -131,8 +152,8 @@ export function TimetableView() {
         <p className="mt-1 text-sm text-muted-foreground">A clear view of your children&apos;s school week.</p>
       </div>
 
-      {/* Controls: child selector + week navigation */}
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      {/* Child selector */}
+      <div className="mb-6">
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -142,7 +163,7 @@ export function TimetableView() {
                     <AvatarImage src={activeChild?.avatar || "/placeholder.svg"} alt={activeChild?.name} />
                     <AvatarFallback>{activeChild?.name?.[0]}</AvatarFallback>
                   </Avatar>
-                  <span className="font-medium text-foreground">{activeChild?.name}</span>
+                  <span className="font-medium text-foreground">{activeChild?.name ?? "Select child"}</span>
                 </span>
                 <ChevronDown className="size-4 text-muted-foreground" />
               </Button>
@@ -150,11 +171,7 @@ export function TimetableView() {
           />
           <DropdownMenuContent className="w-64">
             {children.map((child) => (
-              <DropdownMenuItem
-                key={child.id}
-                onClick={() => setSelectedId(child.id)}
-                className="gap-2.5 py-2"
-              >
+              <DropdownMenuItem key={child.id} onClick={() => setSelectedId(child.id)} className="gap-2.5 py-2">
                 <Avatar className="size-7">
                   <AvatarImage src={child.avatar || "/placeholder.svg"} alt={child.name} />
                   <AvatarFallback>{child.name[0]}</AvatarFallback>
@@ -167,45 +184,16 @@ export function TimetableView() {
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
-
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="icon"
-            className="size-11 rounded-xl"
-            onClick={() => shiftWeek(-1)}
-            aria-label="Previous week"
-          >
-            <ChevronLeft className="size-4" />
-          </Button>
-          <div className="flex h-11 items-center gap-2 rounded-xl border border-input bg-card px-4 text-sm font-medium text-foreground shadow-sm">
-            <CalendarDays className="size-4 text-brand" />
-            <span aria-live="polite">{formatWeekRange(weekStart)}</span>
-          </div>
-          <Button
-            variant="outline"
-            size="icon"
-            className="size-11 rounded-xl"
-            onClick={() => shiftWeek(1)}
-            aria-label="Next week"
-          >
-            <ChevronRight className="size-4" />
-          </Button>
-        </div>
       </div>
 
-      {/* Body */}
-      {isLoading ? (
-        <LoadingState />
-      ) : !hasTimetable ? (
+      {/* Body: one labelled timetable context per institution, or the empty state */}
+      {institutions.length === 0 ? (
         <EmptyState />
       ) : (
-        <div className="flex flex-col gap-4">
-          {WEEKDAYS.map((day) => {
-            const entries = entriesByDay.get(day) ?? []
-            const date = dateForWeekday(weekStart, day)
-            return <DayRow key={day} day={day} date={date} entries={entries} />
-          })}
+        <div className="flex flex-col gap-8">
+          {institutions.map((institution) => (
+            <InstitutionTimetable key={institution.id} institution={institution} />
+          ))}
         </div>
       )}
 
@@ -224,48 +212,213 @@ export function TimetableView() {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Day row                                                                    */
+/*  Per-institution timetable (academic year + monthly calendar)               */
 /* -------------------------------------------------------------------------- */
 
-function DayRow({ day, date, entries }: { day: string; date: Date; entries: TimetableEntry[] }) {
+function InstitutionTimetable({ institution }: { institution: DemoInstitution }) {
+  const isUniversity = institution.type === "university"
+  const [yearIndex, setYearIndex] = useState(0)
+  const activeYear = institution.years[yearIndex] ?? institution.years[0]
+
+  // The visible month; navigation shifts it by ±1 month. Start on the current month.
+  const [viewDate, setViewDate] = useState(() => {
+    const now = new Date()
+    return new Date(now.getFullYear(), now.getMonth(), 1)
+  })
+  const [selectedDate, setSelectedDate] = useState<Date>(() => new Date())
+
+  const weeks = useMemo(() => buildMonthMatrix(viewDate), [viewDate])
+  const monthLabel = `${MONTHS[viewDate.getMonth()]} ${viewDate.getFullYear()}`
+
+  function classesForDate(date: Date): DemoClass[] {
+    const weekday = WEEKDAY_BY_INDEX[date.getDay()]
+    if (!weekday) return []
+    return activeYear.weekly[weekday] ?? []
+  }
+
+  function shiftMonth(delta: number) {
+    setViewDate((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1))
+  }
+
+  const selectedInMonth =
+    selectedDate.getMonth() === viewDate.getMonth() && selectedDate.getFullYear() === viewDate.getFullYear()
+  const selectedClasses = selectedInMonth ? classesForDate(selectedDate) : []
+  const Label = isUniversity ? GraduationCap : School
+
   return (
-    <Card className="overflow-hidden p-0">
-      <div className="grid gap-0 md:grid-cols-[minmax(180px,220px)_1fr]">
-        {/* Day label column */}
-        <div className="flex flex-col justify-center gap-1.5 border-b border-border bg-brand-muted/40 p-5 md:border-b-0 md:border-r">
-          <p className="font-display text-lg font-bold text-brand">{day}</p>
-          <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-            <CalendarDays className="size-3.5" />
-            {formatDate(date)}
+    <Card className="gap-0 overflow-hidden p-0">
+      {/* Context header: institution + academic year / class / section */}
+      <div className="flex flex-col gap-4 border-b border-border bg-brand-muted/30 p-5 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex items-start gap-3">
+          <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-brand-muted text-brand">
+            <Label className="size-5" />
+          </span>
+          <div>
+            <h2 className="flex items-center gap-2 font-display text-lg font-bold text-foreground">
+              {isUniversity ? "University Timetable" : "School Timetable"}
+              <Badge variant="secondary" className="font-normal">
+                Demo data
+              </Badge>
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {isUniversity ? "University" : "School"}: {institution.name}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <Badge variant="outline">Academic year {activeYear.year}</Badge>
+              <Badge variant="outline">{isUniversity ? "Year" : "Class"}: {activeYear.level}</Badge>
+              <Badge variant="outline">Section: {activeYear.section}</Badge>
+            </div>
+          </div>
+        </div>
+
+        {/* Academic-year selector */}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button variant="outline" className="h-11 shrink-0 justify-between gap-2 rounded-xl px-3 sm:w-52">
+                <span className="flex items-center gap-2">
+                  <CalendarDays className="size-4 text-brand" />
+                  <span className="font-medium text-foreground">{activeYear.year}</span>
+                </span>
+                <ChevronDown className="size-4 text-muted-foreground" />
+              </Button>
+            }
+          />
+          <DropdownMenuContent className="w-52">
+            {institution.years.map((year, index) => (
+              <DropdownMenuItem key={year.year} onClick={() => setYearIndex(index)} className="gap-2 py-2">
+                <span className="flex flex-col">
+                  <span className="text-sm font-medium text-foreground">Academic year {year.year}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {isUniversity ? "Year" : "Class"} {year.level} · Section {year.section}
+                  </span>
+                </span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      {/* Month navigation */}
+      <div className="flex items-center justify-between gap-2 border-b border-border p-4">
+        <Button
+          variant="outline"
+          size="icon"
+          className="size-10 rounded-xl"
+          onClick={() => shiftMonth(-1)}
+          aria-label="Previous month"
+        >
+          <ChevronLeft className="size-4" />
+        </Button>
+        <span className="font-display text-base font-semibold text-foreground" aria-live="polite">
+          {monthLabel}
+        </span>
+        <Button
+          variant="outline"
+          size="icon"
+          className="size-10 rounded-xl"
+          onClick={() => shiftMonth(1)}
+          aria-label="Next month"
+        >
+          <ChevronRight className="size-4" />
+        </Button>
+      </div>
+
+      {/* Monthly calendar grid */}
+      <div className="p-4">
+        <div className="grid grid-cols-7 gap-1.5">
+          {DOW_HEADERS.map((label) => (
+            <div key={label} className="pb-1 text-center text-xs font-semibold text-muted-foreground">
+              {label}
+            </div>
+          ))}
+          {weeks.flat().map((date) => {
+            const inMonth = date.getMonth() === viewDate.getMonth()
+            const classes = classesForDate(date)
+            const isSelected = isSameDay(date, selectedDate)
+            const isToday = isSameDay(date, new Date())
+            return (
+              <button
+                key={date.toISOString()}
+                type="button"
+                onClick={() => setSelectedDate(new Date(date))}
+                aria-pressed={isSelected}
+                className={[
+                  "flex min-h-16 flex-col gap-1 rounded-lg border p-1.5 text-left transition-colors sm:min-h-20",
+                  inMonth ? "bg-card" : "bg-muted/40 text-muted-foreground",
+                  isSelected ? "border-brand ring-1 ring-brand" : "border-border hover:border-brand/50",
+                ].join(" ")}
+              >
+                <span
+                  className={[
+                    "text-xs font-medium",
+                    isToday ? "grid size-5 place-items-center rounded-full bg-brand text-brand-foreground" : "",
+                    !inMonth ? "text-muted-foreground" : "text-foreground",
+                  ].join(" ")}
+                >
+                  {date.getDate()}
+                </span>
+                <span className="flex flex-col gap-0.5">
+                  {classes.slice(0, 2).map((entry, i) => {
+                    const meta = getSubjectMeta(entry.subject)
+                    return (
+                      <span
+                        key={i}
+                        className={`truncate rounded px-1 py-0.5 text-[10px] font-medium leading-tight ${meta.tone}`}
+                      >
+                        {entry.subject}
+                      </span>
+                    )
+                  })}
+                  {classes.length > 2 && (
+                    <span className="px-1 text-[10px] font-medium text-muted-foreground">
+                      +{classes.length - 2} more
+                    </span>
+                  )}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Selected day detail */}
+      <div className="border-t border-border p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <p className="flex items-center gap-2 font-display text-base font-semibold text-foreground">
+            <CalendarDays className="size-4 text-brand" />
+            {selectedDate.toLocaleDateString("en-US", {
+              weekday: "long",
+              day: "numeric",
+              month: "long",
+              year: "numeric",
+            })}
           </p>
-          {entries.length > 0 && (
+          {selectedClasses.length > 0 && (
             <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
               <Clock className="size-3.5" />
-              {schoolHours(entries)}
+              {dayHours(selectedClasses)}
             </p>
           )}
         </div>
 
-        {/* Subject cards */}
-        <div className="p-4">
-          {entries.length > 0 ? (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {entries.map((entry) => (
-                <SubjectCard key={entry.id} entry={entry} />
-              ))}
-            </div>
-          ) : (
-            <div className="flex h-full min-h-20 items-center justify-center rounded-xl border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
-              No classes scheduled
-            </div>
-          )}
-        </div>
+        {selectedClasses.length > 0 ? (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {selectedClasses.map((entry, i) => (
+              <SubjectCard key={i} entry={entry} />
+            ))}
+          </div>
+        ) : (
+          <div className="flex min-h-20 items-center justify-center rounded-xl border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
+            No classes scheduled on this day.
+          </div>
+        )}
       </div>
     </Card>
   )
 }
 
-function SubjectCard({ entry }: { entry: TimetableEntry }) {
+function SubjectCard({ entry }: { entry: DemoClass }) {
   const meta = getSubjectMeta(entry.subject)
   const Icon = meta.icon
   return (
@@ -285,34 +438,8 @@ function SubjectCard({ entry }: { entry: TimetableEntry }) {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Loading / empty states                                                     */
+/*  Empty state                                                                */
 /* -------------------------------------------------------------------------- */
-
-function LoadingState() {
-  return (
-    <div className="flex flex-col gap-4">
-      {WEEKDAYS.map((day) => (
-        <Card key={day} className="overflow-hidden p-0">
-          <div className="grid gap-0 md:grid-cols-[minmax(180px,220px)_1fr]">
-            <div className="flex flex-col justify-center gap-2 border-b border-border bg-brand-muted/40 p-5 md:border-b-0 md:border-r">
-              <div className="h-5 w-24 animate-pulse rounded bg-muted" />
-              <div className="h-4 w-28 animate-pulse rounded bg-muted" />
-            </div>
-            <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
-              {[0, 1, 2].map((i) => (
-                <div key={i} className="h-20 animate-pulse rounded-xl bg-muted" />
-              ))}
-            </div>
-          </div>
-        </Card>
-      ))}
-      <p className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="size-4 animate-spin" />
-        Loading timetable…
-      </p>
-    </div>
-  )
-}
 
 function EmptyState() {
   return (
@@ -322,7 +449,7 @@ function EmptyState() {
       </span>
       <h2 className="font-display text-lg font-semibold text-foreground">No timetable available</h2>
       <p className="max-w-sm text-sm text-muted-foreground">
-        Your school has not published a timetable for this week yet.
+        Your school has not published a timetable for this child yet.
       </p>
     </Card>
   )
