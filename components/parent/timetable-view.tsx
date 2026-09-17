@@ -1,117 +1,289 @@
 "use client"
 
-import { useMemo, useState } from "react"
+/**
+ * Parent → Timetable (FRONTEND-ONLY prototype).
+ *
+ * A single, filter-driven, editable timetable:
+ *   Institution Type → Class → Section → monthly period grid → edit/add/delete → Save.
+ *
+ * Persistence is intentionally frontend-only (localStorage), keyed per
+ * child + institution-type + class + section, so each combination keeps its own
+ * state and survives refreshes. There is NO database, API, schema, or auth
+ * coupling here — that arrives when the real School Admin backend is built.
+ */
+
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import {
   ArrowLeft,
-  CalendarDays,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Clock,
-  GraduationCap,
   Info,
-  CalendarX2,
-  School,
+  MapPin,
+  Plus,
+  Save,
+  Trash2,
 } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { useChildrenStore } from "@/components/parent/children-store"
 import {
-  getDemoInstitutions,
-  getSubjectMeta,
-  type DemoClass,
-  type DemoInstitution,
-  type WeekdayName,
-} from "@/lib/demo-academics"
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { useChildrenStore } from "@/components/parent/children-store"
 
 /* -------------------------------------------------------------------------- */
-/*  Date + school-hours helpers                                                */
+/*  Model + static config                                                      */
 /* -------------------------------------------------------------------------- */
 
-/** Weekday name for a Date's `getDay()` index (0 = Sunday). Weekends are null. */
-const WEEKDAY_BY_INDEX: (WeekdayName | null)[] = [
-  null, // Sunday
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  null, // Saturday
+interface Entry {
+  subject: string
+  teacher: string
+  room: string
+  start: string
+  end: string
+  notes: string
+}
+
+/** grid[periodId][dayKey] -> entry (or null for an empty slot). */
+type Grid = Record<string, Record<string, Entry | null>>
+
+interface Period {
+  id: string
+  label: string
+  time: string
+  start: string
+  end: string
+}
+
+const PERIODS: Period[] = [
+  { id: "p1", label: "1", time: "8:00 AM – 8:45 AM", start: "8:00 AM", end: "8:45 AM" },
+  { id: "p2", label: "2", time: "8:45 AM – 9:30 AM", start: "8:45 AM", end: "9:30 AM" },
+  { id: "p3", label: "3", time: "9:45 AM – 10:30 AM", start: "9:45 AM", end: "10:30 AM" },
+  { id: "p4", label: "4", time: "10:30 AM – 11:15 AM", start: "10:30 AM", end: "11:15 AM" },
+  { id: "p5", label: "5", time: "11:30 AM – 12:15 PM", start: "11:30 AM", end: "12:15 PM" },
+  { id: "p6", label: "6", time: "12:15 PM – 1:00 PM", start: "12:15 PM", end: "1:00 PM" },
+  { id: "p7", label: "7", time: "1:45 PM – 2:30 PM", start: "1:45 PM", end: "2:30 PM" },
+  { id: "p8", label: "8", time: "2:30 PM – 3:15 PM", start: "2:30 PM", end: "3:15 PM" },
 ]
 
-/** Monday-first column headers for the month grid. */
-const DOW_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+const DAYS = [
+  { key: "mon", name: "Mon" },
+  { key: "tue", name: "Tue" },
+  { key: "wed", name: "Wed" },
+  { key: "thu", name: "Thu" },
+  { key: "fri", name: "Fri" },
+  { key: "sat", name: "Sat" },
+] as const
 
 const MONTHS = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
 ]
 
-/** Parse a human time like "8:00 AM" into minutes since midnight. */
-function timeToMinutes(time: string): number {
-  const match = time.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i)
-  if (!match) return 0
-  let hours = Number(match[1]) % 12
-  const minutes = Number(match[2])
-  if (match[3].toUpperCase() === "PM") hours += 12
-  return hours * 60 + minutes
+type InstitutionType = "school" | "university" | "college"
+
+const INSTITUTION_TYPES: { key: InstitutionType; label: string }[] = [
+  { key: "school", label: "School" },
+  { key: "university", label: "University" },
+  { key: "college", label: "College" },
+]
+
+const CLASS_OPTIONS: Record<InstitutionType, string[]> = {
+  school: Array.from({ length: 12 }, (_, i) => `Class ${i + 1}`),
+  university: ["1st Year", "2nd Year", "3rd Year", "4th Year"],
+  college: ["1st Year", "2nd Year", "3rd Year"],
 }
 
-/** School/college hours for a day, e.g. "8:00 AM – 11:25 AM", from its classes. */
-function dayHours(classes: DemoClass[]): string {
-  if (!classes.length) return ""
-  const starts = classes.map((c) => timeToMinutes(c.start))
-  const ends = classes.map((c) => timeToMinutes(c.end))
-  const first = classes[starts.indexOf(Math.min(...starts))].start
-  const last = classes[ends.indexOf(Math.max(...ends))].end
-  return `${first} – ${last}`
+/** Label used for the "Class" filter, adapted per institution type. */
+const CLASS_LABEL: Record<InstitutionType, string> = {
+  school: "Class",
+  university: "Year",
+  college: "Year",
 }
 
-function isSameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
-  )
+const SECTION_OPTIONS = ["A", "B", "C", "D"]
+
+/* -------------------------------------------------------------------------- */
+/*  Subject colour accents                                                     */
+/* -------------------------------------------------------------------------- */
+
+const ACCENTS: Record<string, { bar: string; bg: string }> = {
+  Mathematics: { bar: "bg-blue-400", bg: "bg-blue-50/60" },
+  English: { bar: "bg-violet-400", bg: "bg-violet-50/60" },
+  Science: { bar: "bg-green-400", bg: "bg-green-50/60" },
+  "Social Studies": { bar: "bg-orange-400", bg: "bg-orange-50/60" },
+  Hindi: { bar: "bg-rose-400", bg: "bg-rose-50/60" },
+  "Computer Science": { bar: "bg-teal-400", bg: "bg-teal-50/60" },
+  "Art & Craft": { bar: "bg-fuchsia-400", bg: "bg-fuchsia-50/60" },
+  Art: { bar: "bg-fuchsia-400", bg: "bg-fuchsia-50/60" },
+  Music: { bar: "bg-amber-400", bg: "bg-amber-50/60" },
+  "Physical Education": { bar: "bg-sky-400", bg: "bg-sky-50/60" },
+  Robotics: { bar: "bg-amber-400", bg: "bg-amber-50/60" },
+  History: { bar: "bg-orange-400", bg: "bg-orange-50/60" },
+  Geography: { bar: "bg-cyan-400", bg: "bg-cyan-50/60" },
+  Library: { bar: "bg-indigo-400", bg: "bg-indigo-50/60" },
 }
 
-/** Build the Monday-first weeks (each 7 days) overlapping the given month. */
-function buildMonthMatrix(viewDate: Date): Date[][] {
+const FALLBACK_ACCENTS = [
+  { bar: "bg-violet-400", bg: "bg-violet-50/60" },
+  { bar: "bg-emerald-400", bg: "bg-emerald-50/60" },
+  { bar: "bg-sky-400", bg: "bg-sky-50/60" },
+  { bar: "bg-amber-400", bg: "bg-amber-50/60" },
+  { bar: "bg-rose-400", bg: "bg-rose-50/60" },
+  { bar: "bg-teal-400", bg: "bg-teal-50/60" },
+]
+
+function accentFor(subject: string) {
+  if (ACCENTS[subject]) return ACCENTS[subject]
+  let hash = 0
+  for (let i = 0; i < subject.length; i++) hash = (hash * 31 + subject.charCodeAt(i)) >>> 0
+  return FALLBACK_ACCENTS[hash % FALLBACK_ACCENTS.length]
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Seed data (demo/UI-only, mirrors the reference design)                     */
+/* -------------------------------------------------------------------------- */
+
+/** [subject, teacher, room] per period-row × day-column, or null for empty. */
+const SCHOOL_SEED: (readonly [string, string, string] | null)[][] = [
+  [
+    ["Mathematics", "Ms. Priya Sharma", "Room 101"],
+    ["English", "Mr. Arjun Mehta", "Room 102"],
+    ["Science", "Ms. Neha Verma", "Lab 1"],
+    ["Mathematics", "Ms. Priya Sharma", "Room 101"],
+    ["Social Studies", "Mr. Rohan Desai", "Room 104"],
+    ["Computer Science", "Ms. Kavita Nair", "Lab 2"],
+  ],
+  [
+    ["English", "Mr. Arjun Mehta", "Room 102"],
+    ["Science", "Ms. Neha Verma", "Lab 1"],
+    ["Mathematics", "Ms. Priya Sharma", "Room 101"],
+    ["English", "Mr. Arjun Mehta", "Room 102"],
+    ["Hindi", "Ms. Sunita Rao", "Room 103"],
+    ["Mathematics", "Ms. Priya Sharma", "Room 101"],
+  ],
+  [
+    ["Science", "Ms. Neha Verma", "Lab 1"],
+    ["Mathematics", "Ms. Priya Sharma", "Room 101"],
+    ["English", "Mr. Arjun Mehta", "Room 102"],
+    ["Science", "Ms. Neha Verma", "Lab 1"],
+    ["Mathematics", "Ms. Priya Sharma", "Room 101"],
+    ["Art & Craft", "Ms. Pooja Iyer", "Room 105"],
+  ],
+  [
+    ["Social Studies", "Mr. Rohan Desai", "Room 104"],
+    ["Hindi", "Ms. Sunita Rao", "Room 103"],
+    ["Social Studies", "Mr. Rohan Desai", "Room 104"],
+    ["Hindi", "Ms. Sunita Rao", "Room 103"],
+    ["Science", "Ms. Neha Verma", "Lab 1"],
+    ["Music", "Mr. Sandeep Kulkarni", "Room 106"],
+  ],
+  [
+    ["Hindi", "Ms. Sunita Rao", "Room 103"],
+    ["Social Studies", "Mr. Rohan Desai", "Room 104"],
+    ["Computer Science", "Ms. Kavita Nair", "Lab 2"],
+    ["Art & Craft", "Ms. Pooja Iyer", "Room 105"],
+    ["English", "Mr. Arjun Mehta", "Room 102"],
+    ["Physical Education", "Mr. Vivek Shah", "Sports Ground"],
+  ],
+  [
+    ["Computer Science", "Ms. Kavita Nair", "Lab 2"],
+    ["Art & Craft", "Ms. Pooja Iyer", "Room 105"],
+    ["Hindi", "Ms. Sunita Rao", "Room 103"],
+    ["Music", "Mr. Sandeep Kulkarni", "Room 106"],
+    ["Computer Science", "Ms. Kavita Nair", "Lab 2"],
+    ["Science", "Ms. Neha Verma", "Lab 1"],
+  ],
+  [
+    ["Physical Education", "Mr. Vivek Shah", "Sports Ground"],
+    ["Computer Science", "Ms. Kavita Nair", "Lab 2"],
+    ["Physical Education", "Mr. Vivek Shah", "Sports Ground"],
+    ["Social Studies", "Mr. Rohan Desai", "Room 104"],
+    ["Music", "Mr. Sandeep Kulkarni", "Room 106"],
+    null,
+  ],
+  [null, null, null, null, null, null],
+]
+
+function emptyGrid(): Grid {
+  const grid: Grid = {}
+  for (const period of PERIODS) {
+    grid[period.id] = {}
+    for (const day of DAYS) grid[period.id][day.key] = null
+  }
+  return grid
+}
+
+/**
+ * Default grid for a filter combination. Only the reference combination
+ * (School · Class 8 · A) is seeded with sample classes; every other
+ * combination starts empty and ready to fill in.
+ */
+function seedGrid(type: InstitutionType, klass: string, section: string): Grid {
+  const grid = emptyGrid()
+  if (type === "school" && klass === "Class 8" && section === "A") {
+    PERIODS.forEach((period, pIndex) => {
+      DAYS.forEach((day, dIndex) => {
+        const seed = SCHOOL_SEED[pIndex]?.[dIndex]
+        if (seed) {
+          grid[period.id][day.key] = {
+            subject: seed[0],
+            teacher: seed[1],
+            room: seed[2],
+            start: period.start,
+            end: period.end,
+            notes: "",
+          }
+        }
+      })
+    })
+  }
+  return grid
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Date helpers (month → first consecutive Mon–Sat within that month)         */
+/* -------------------------------------------------------------------------- */
+
+function weekDatesForMonth(viewDate: Date): Date[] {
   const year = viewDate.getFullYear()
   const month = viewDate.getMonth()
   const first = new Date(year, month, 1)
-  const mondayOffset = (first.getDay() + 6) % 7 // 0 = Monday … 6 = Sunday
-  const cursor = new Date(year, month, 1 - mondayOffset)
-  const lastDay = new Date(year, month + 1, 0)
+  // Date of the first Monday of the month (getDay: Sun=0 … Sat=6).
+  const firstMonday = 1 + ((8 - first.getDay()) % 7)
+  return DAYS.map((_, i) => new Date(year, month, firstMonday + i))
+}
 
-  const weeks: Date[][] = []
-  while (cursor <= lastDay) {
-    const week: Date[] = []
-    for (let d = 0; d < 7; d++) {
-      week.push(new Date(cursor))
-      cursor.setDate(cursor.getDate() + 1)
-    }
-    weeks.push(week)
+function storageKey(childId: string, type: InstitutionType, klass: string, section: string) {
+  return `aspira:timetable:v1:${childId}:${type}:${klass}:${section}`
+}
+
+function readGrid(key: string): Grid | null {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = window.localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as Grid) : null
+  } catch {
+    return null
   }
-  return weeks
 }
 
 /* -------------------------------------------------------------------------- */
@@ -119,338 +291,458 @@ function buildMonthMatrix(viewDate: Date): Date[][] {
 /* -------------------------------------------------------------------------- */
 
 export function TimetableView() {
-  // Children come from the shared, DB-backed store so newly added children appear here too.
   const { children } = useChildrenStore()
-  // When navigating in from a specific child (My Children → Timetable), that child's id arrives
-  // as `?childId=`. Seed the initial selection from it; manual selection overrides afterwards.
   const searchParams = useSearchParams()
   const initialChildId = searchParams.get("childId")
   const [selectedId, setSelectedId] = useState<string | null>(initialChildId)
-
   const activeChild = children.find((child) => child.id === selectedId) ?? children[0]
+  const childId = activeChild?.id ?? "none"
 
-  // Timetable data is DEMO/UI-only and matched by child name (see lib/demo-academics).
-  const institutions = useMemo<DemoInstitution[]>(
-    () => (activeChild ? getDemoInstitutions(activeChild.name) : []),
-    [activeChild],
-  )
+  // Filters.
+  const [type, setType] = useState<InstitutionType>("school")
+  const [klass, setKlass] = useState("Class 8")
+  const [section, setSection] = useState("A")
 
-  return (
-    <div className="mx-auto max-w-6xl">
-      {/* Heading */}
-      <div className="mb-6">
-        <div className="flex items-center gap-2">
-          <Link
-            href="/parent"
-            aria-label="Back"
-            className="inline-flex w-fit items-center gap-2 text-sm font-medium text-brand hover:underline"
-          >
-            <ArrowLeft className="size-4" />
-          </Link>
-          <h1 className="font-display text-3xl font-bold text-foreground text-balance">Timetable</h1>
-        </div>
-        <p className="mt-1 text-sm text-muted-foreground">A clear view of your children&apos;s school week.</p>
-      </div>
-
-      {/* Child selector */}
-      <div className="mb-6">
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button variant="outline" className="h-12 justify-between gap-3 rounded-xl px-3 sm:w-64">
-                <span className="flex items-center gap-2.5">
-                  <Avatar className="size-8">
-                    <AvatarImage src={activeChild?.avatar || "/placeholder.svg"} alt={activeChild?.name} />
-                    <AvatarFallback>{activeChild?.name?.[0]}</AvatarFallback>
-                  </Avatar>
-                  <span className="font-medium text-foreground">{activeChild?.name ?? "Select child"}</span>
-                </span>
-                <ChevronDown className="size-4 text-muted-foreground" />
-              </Button>
-            }
-          />
-          <DropdownMenuContent className="w-64">
-            {children.map((child) => (
-              <DropdownMenuItem key={child.id} onClick={() => setSelectedId(child.id)} className="gap-2.5 py-2">
-                <Avatar className="size-7">
-                  <AvatarImage src={child.avatar || "/placeholder.svg"} alt={child.name} />
-                  <AvatarFallback>{child.name[0]}</AvatarFallback>
-                </Avatar>
-                <span className="flex flex-col">
-                  <span className="text-sm font-medium text-foreground">{child.name}</span>
-                  <span className="text-xs text-muted-foreground">{child.className}</span>
-                </span>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
-      {/* Body: one labelled timetable context per institution, or the empty state */}
-      {institutions.length === 0 ? (
-        <EmptyState />
-      ) : (
-        <div className="flex flex-col gap-8">
-          {institutions.map((institution) => (
-            <InstitutionTimetable key={institution.id} institution={institution} />
-          ))}
-        </div>
-      )}
-
-      {/* Footer notes */}
-      <div className="mt-8 flex flex-col items-center gap-1 text-center">
-        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-          <Info className="size-4" />
-          Timetable is subject to change. Please check regularly for updates.
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Timetable is managed by your school. Contact the school for timetable changes.
-        </p>
-      </div>
-    </div>
-  )
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Per-institution timetable (academic year + monthly calendar)               */
-/* -------------------------------------------------------------------------- */
-
-function InstitutionTimetable({ institution }: { institution: DemoInstitution }) {
-  const isUniversity = institution.type === "university"
-  const [yearIndex, setYearIndex] = useState(0)
-  const activeYear = institution.years[yearIndex] ?? institution.years[0]
-
-  // The visible month; navigation shifts it by ±1 month. Start on the current month.
+  // Month navigation (first day of the visible month).
   const [viewDate, setViewDate] = useState(() => {
     const now = new Date()
     return new Date(now.getFullYear(), now.getMonth(), 1)
   })
-  const [selectedDate, setSelectedDate] = useState<Date>(() => new Date())
 
-  const weeks = useMemo(() => buildMonthMatrix(viewDate), [viewDate])
+  // Timetable state + persistence bookkeeping.
+  const [grid, setGrid] = useState<Grid>(() => seedGrid("school", "Class 8", "A"))
+  const [dirty, setDirty] = useState(false)
+  const [justSaved, setJustSaved] = useState(false)
+
+  const key = storageKey(childId, type, klass, section)
+
+  // Load the stored grid (or a fresh seed) whenever the active combination changes.
+  useEffect(() => {
+    setGrid(readGrid(key) ?? seedGrid(type, klass, section))
+    setDirty(false)
+    setJustSaved(false)
+  }, [key, type, klass, section])
+
+  const weekDates = useMemo(() => weekDatesForMonth(viewDate), [viewDate])
   const monthLabel = `${MONTHS[viewDate.getMonth()]} ${viewDate.getFullYear()}`
 
-  function classesForDate(date: Date): DemoClass[] {
-    const weekday = WEEKDAY_BY_INDEX[date.getDay()]
-    if (!weekday) return []
-    return activeYear.weekly[weekday] ?? []
+  // Editing dialog.
+  const [editing, setEditing] = useState<{ periodId: string; dayKey: string } | null>(null)
+  const [form, setForm] = useState<Entry>({ subject: "", teacher: "", room: "", start: "", end: "", notes: "" })
+
+  function openEditor(periodId: string, dayKey: string) {
+    const existing = grid[periodId]?.[dayKey]
+    const period = PERIODS.find((p) => p.id === periodId)!
+    setForm(
+      existing ?? { subject: "", teacher: "", room: "", start: period.start, end: period.end, notes: "" },
+    )
+    setEditing({ periodId, dayKey })
+  }
+
+  function commitEntry() {
+    if (!editing || !form.subject.trim()) return
+    const { periodId, dayKey } = editing
+    setGrid((prev) => ({
+      ...prev,
+      [periodId]: { ...prev[periodId], [dayKey]: { ...form, subject: form.subject.trim() } },
+    }))
+    setDirty(true)
+    setJustSaved(false)
+    setEditing(null)
+  }
+
+  function deleteEntry() {
+    if (!editing) return
+    const { periodId, dayKey } = editing
+    setGrid((prev) => ({ ...prev, [periodId]: { ...prev[periodId], [dayKey]: null } }))
+    setDirty(true)
+    setJustSaved(false)
+    setEditing(null)
+  }
+
+  function saveTimetable() {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(grid))
+      setDirty(false)
+      setJustSaved(true)
+      window.setTimeout(() => setJustSaved(false), 2200)
+    } catch {
+      // Ignore storage failures (e.g. private mode); prototype persistence only.
+    }
   }
 
   function shiftMonth(delta: number) {
     setViewDate((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1))
   }
 
-  const selectedInMonth =
-    selectedDate.getMonth() === viewDate.getMonth() && selectedDate.getFullYear() === viewDate.getFullYear()
-  const selectedClasses = selectedInMonth ? classesForDate(selectedDate) : []
-  const Label = isUniversity ? GraduationCap : School
+  function changeType(next: InstitutionType) {
+    setType(next)
+    setKlass(CLASS_OPTIONS[next][0])
+    setSection("A")
+  }
+
+  const editingExisting = editing ? Boolean(grid[editing.periodId]?.[editing.dayKey]) : false
 
   return (
-    <Card className="gap-0 overflow-hidden p-0">
-      {/* Context header: institution + academic year / class / section */}
-      <div className="flex flex-col gap-4 border-b border-border bg-brand-muted/30 p-5 sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex items-start gap-3">
-          <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-brand-muted text-brand">
-            <Label className="size-5" />
-          </span>
-          <div>
-            <h2 className="flex items-center gap-2 font-display text-lg font-bold text-foreground">
-              {isUniversity ? "University Timetable" : "School Timetable"}
-              <Badge variant="secondary" className="font-normal">
-                Demo data
-              </Badge>
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              {isUniversity ? "University" : "School"}: {institution.name}
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              <Badge variant="outline">Academic year {activeYear.year}</Badge>
-              <Badge variant="outline">{isUniversity ? "Year" : "Class"}: {activeYear.level}</Badge>
-              <Badge variant="outline">Section: {activeYear.section}</Badge>
-            </div>
+    <div className="mx-auto max-w-6xl">
+      {/* Heading + child selector */}
+      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/parent"
+              aria-label="Back"
+              className="inline-flex w-fit items-center gap-2 text-sm font-medium text-brand hover:underline"
+            >
+              <ArrowLeft className="size-4" />
+            </Link>
+            <h1 className="font-display text-3xl font-bold text-foreground text-balance">Timetable</h1>
           </div>
-        </div>
-
-        {/* Academic-year selector */}
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button variant="outline" className="h-11 shrink-0 justify-between gap-2 rounded-xl px-3 sm:w-52">
-                <span className="flex items-center gap-2">
-                  <CalendarDays className="size-4 text-brand" />
-                  <span className="font-medium text-foreground">{activeYear.year}</span>
-                </span>
-                <ChevronDown className="size-4 text-muted-foreground" />
-              </Button>
-            }
-          />
-          <DropdownMenuContent className="w-52">
-            {institution.years.map((year, index) => (
-              <DropdownMenuItem key={year.year} onClick={() => setYearIndex(index)} className="gap-2 py-2">
-                <span className="flex flex-col">
-                  <span className="text-sm font-medium text-foreground">Academic year {year.year}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {isUniversity ? "Year" : "Class"} {year.level} · Section {year.section}
-                  </span>
-                </span>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
-      {/* Month navigation */}
-      <div className="flex items-center justify-between gap-2 border-b border-border p-4">
-        <Button
-          variant="outline"
-          size="icon"
-          className="size-10 rounded-xl"
-          onClick={() => shiftMonth(-1)}
-          aria-label="Previous month"
-        >
-          <ChevronLeft className="size-4" />
-        </Button>
-        <span className="font-display text-base font-semibold text-foreground" aria-live="polite">
-          {monthLabel}
-        </span>
-        <Button
-          variant="outline"
-          size="icon"
-          className="size-10 rounded-xl"
-          onClick={() => shiftMonth(1)}
-          aria-label="Next month"
-        >
-          <ChevronRight className="size-4" />
-        </Button>
-      </div>
-
-      {/* Monthly calendar grid */}
-      <div className="p-4">
-        <div className="grid grid-cols-7 gap-1.5">
-          {DOW_HEADERS.map((label) => (
-            <div key={label} className="pb-1 text-center text-xs font-semibold text-muted-foreground">
-              {label}
-            </div>
-          ))}
-          {weeks.flat().map((date) => {
-            const inMonth = date.getMonth() === viewDate.getMonth()
-            const classes = classesForDate(date)
-            const isSelected = isSameDay(date, selectedDate)
-            const isToday = isSameDay(date, new Date())
-            return (
-              <button
-                key={date.toISOString()}
-                type="button"
-                onClick={() => setSelectedDate(new Date(date))}
-                aria-pressed={isSelected}
-                className={[
-                  "flex min-h-16 flex-col gap-1 rounded-lg border p-1.5 text-left transition-colors sm:min-h-20",
-                  inMonth ? "bg-card" : "bg-muted/40 text-muted-foreground",
-                  isSelected ? "border-brand ring-1 ring-brand" : "border-border hover:border-brand/50",
-                ].join(" ")}
-              >
-                <span
-                  className={[
-                    "text-xs font-medium",
-                    isToday ? "grid size-5 place-items-center rounded-full bg-brand text-brand-foreground" : "",
-                    !inMonth ? "text-muted-foreground" : "text-foreground",
-                  ].join(" ")}
-                >
-                  {date.getDate()}
-                </span>
-                <span className="flex flex-col gap-0.5">
-                  {classes.slice(0, 2).map((entry, i) => {
-                    const meta = getSubjectMeta(entry.subject)
-                    return (
-                      <span
-                        key={i}
-                        className={`truncate rounded px-1 py-0.5 text-[10px] font-medium leading-tight ${meta.tone}`}
-                      >
-                        {entry.subject}
-                      </span>
-                    )
-                  })}
-                  {classes.length > 2 && (
-                    <span className="px-1 text-[10px] font-medium text-muted-foreground">
-                      +{classes.length - 2} more
-                    </span>
-                  )}
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Selected day detail */}
-      <div className="border-t border-border p-5">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <p className="flex items-center gap-2 font-display text-base font-semibold text-foreground">
-            <CalendarDays className="size-4 text-brand" />
-            {selectedDate.toLocaleDateString("en-US", {
-              weekday: "long",
-              day: "numeric",
-              month: "long",
-              year: "numeric",
-            })}
+          <p className="mt-1 text-sm text-muted-foreground">
+            A clear, editable view of your child&apos;s weekly schedule.
           </p>
-          {selectedClasses.length > 0 && (
-            <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-              <Clock className="size-3.5" />
-              {dayHours(selectedClasses)}
-            </p>
-          )}
         </div>
 
-        {selectedClasses.length > 0 ? (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {selectedClasses.map((entry, i) => (
-              <SubjectCard key={i} entry={entry} />
-            ))}
-          </div>
-        ) : (
-          <div className="flex min-h-20 items-center justify-center rounded-xl border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
-            No classes scheduled on this day.
-          </div>
+        {children.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button variant="outline" className="h-12 justify-between gap-3 rounded-xl px-3 sm:w-60">
+                  <span className="flex items-center gap-2.5">
+                    <Avatar className="size-8">
+                      <AvatarImage src={activeChild?.avatar || "/placeholder.svg"} alt={activeChild?.name} />
+                      <AvatarFallback>{activeChild?.name?.[0]}</AvatarFallback>
+                    </Avatar>
+                    <span className="font-medium text-foreground">{activeChild?.name ?? "Select child"}</span>
+                  </span>
+                  <ChevronDown className="size-4 text-muted-foreground" />
+                </Button>
+              }
+            />
+            <DropdownMenuContent className="w-60">
+              {children.map((child) => (
+                <DropdownMenuItem key={child.id} onClick={() => setSelectedId(child.id)} className="gap-2.5 py-2">
+                  <Avatar className="size-7">
+                    <AvatarImage src={child.avatar || "/placeholder.svg"} alt={child.name} />
+                    <AvatarFallback>{child.name[0]}</AvatarFallback>
+                  </Avatar>
+                  <span className="flex flex-col">
+                    <span className="text-sm font-medium text-foreground">{child.name}</span>
+                    <span className="text-xs text-muted-foreground">{child.className}</span>
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
-    </Card>
-  )
-}
 
-function SubjectCard({ entry }: { entry: DemoClass }) {
-  const meta = getSubjectMeta(entry.subject)
-  const Icon = meta.icon
-  return (
-    <div className="flex items-start gap-3 rounded-xl border border-border bg-card p-3.5 transition-shadow hover:shadow-sm">
-      <span className={`grid size-11 shrink-0 place-items-center rounded-xl ${meta.tone}`}>
-        <Icon className="size-5" />
-      </span>
-      <div className="min-w-0">
-        <p className="truncate font-semibold text-foreground">{entry.subject}</p>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          {entry.start} – {entry.end}
-        </p>
-        <p className="text-sm text-muted-foreground">{entry.room}</p>
+      {/* Controls: filters (left) + month nav & save (right) */}
+      <div className="mb-4 flex flex-col gap-4 rounded-xl border border-border bg-card p-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="flex flex-wrap items-end gap-3">
+          <FilterDropdown
+            label="Institution Type"
+            value={INSTITUTION_TYPES.find((t) => t.key === type)?.label ?? ""}
+            options={INSTITUTION_TYPES.map((t) => t.label)}
+            onSelect={(label) => {
+              const next = INSTITUTION_TYPES.find((t) => t.label === label)
+              if (next) changeType(next.key)
+            }}
+          />
+          <FilterDropdown
+            label={CLASS_LABEL[type]}
+            value={klass}
+            options={CLASS_OPTIONS[type]}
+            onSelect={setKlass}
+          />
+          <FilterDropdown label="Section" value={section} options={SECTION_OPTIONS} onSelect={setSection} />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 rounded-xl border border-border p-0.5">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-9 rounded-lg"
+              onClick={() => shiftMonth(-1)}
+              aria-label="Previous month"
+            >
+              <ChevronLeft className="size-4" />
+            </Button>
+            <span
+              className="min-w-36 text-center font-display text-sm font-semibold text-foreground"
+              aria-live="polite"
+            >
+              {monthLabel}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-9 rounded-lg"
+              onClick={() => shiftMonth(1)}
+              aria-label="Next month"
+            >
+              <ChevronRight className="size-4" />
+            </Button>
+          </div>
+          <Button onClick={saveTimetable} className="h-10 gap-2 rounded-xl">
+            <Save className="size-4" />
+            {justSaved ? "Saved" : "Save Timetable"}
+          </Button>
+        </div>
       </div>
+
+      {/* Context line */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Badge variant="outline">{INSTITUTION_TYPES.find((t) => t.key === type)?.label}</Badge>
+        <Badge variant="outline">
+          {CLASS_LABEL[type]}: {klass}
+        </Badge>
+        <Badge variant="outline">Section: {section}</Badge>
+        {dirty && (
+          <span className="ml-auto text-xs font-medium text-amber-600">Unsaved changes</span>
+        )}
+      </div>
+
+      {/* Timetable grid */}
+      <div className="overflow-x-auto rounded-xl border border-border bg-card">
+        <table className="w-full min-w-[900px] border-separate border-spacing-0 text-sm">
+          <caption className="sr-only">
+            {`Timetable for ${klass} section ${section}, ${monthLabel}`}
+          </caption>
+          <thead>
+            <tr>
+              <th className="sticky left-0 z-20 min-w-[150px] border-b border-r border-border bg-muted/60 px-3 py-3 text-left text-xs font-semibold text-foreground">
+                Period / Time
+              </th>
+              {DAYS.map((day, i) => (
+                <th
+                  key={day.key}
+                  className="min-w-[150px] border-b border-r border-border bg-muted/60 px-3 py-2 text-center last:border-r-0"
+                  scope="col"
+                >
+                  <div className="text-xs font-semibold text-foreground">{day.name}</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {weekDates[i].toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {PERIODS.map((period) => (
+              <tr key={period.id}>
+                <th
+                  scope="row"
+                  className="sticky left-0 z-10 min-w-[150px] border-b border-r border-border bg-card px-3 py-2 text-left align-top"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border text-xs font-semibold text-muted-foreground">
+                      {period.label}
+                    </span>
+                    <span className="whitespace-nowrap text-[11px] font-medium text-muted-foreground">
+                      {period.time}
+                    </span>
+                  </div>
+                </th>
+                {DAYS.map((day) => {
+                  const entry = grid[period.id]?.[day.key]
+                  return (
+                    <td
+                      key={day.key}
+                      className="border-b border-r border-border p-1.5 align-top last:border-r-0"
+                    >
+                      {entry ? (
+                        <TimetableCell entry={entry} onClick={() => openEditor(period.id, day.key)} />
+                      ) : (
+                        <EmptyCell onClick={() => openEditor(period.id, day.key)} />
+                      )}
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Footer notes */}
+      <div className="mt-6 flex flex-col items-center gap-1 text-center">
+        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          <Info className="size-4" />
+          Tap any cell to add, edit, or remove a class. Remember to Save.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Prototype: changes are saved on this device only, per class &amp; section.
+        </p>
+      </div>
+
+      {/* Edit / add dialog */}
+      <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingExisting ? "Edit class" : "Add class"}</DialogTitle>
+            <DialogDescription>
+              Update the details for this period. Changes are kept locally until you save the timetable.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="tt-subject">Subject</Label>
+              <Input
+                id="tt-subject"
+                value={form.subject}
+                onChange={(e) => setForm((f) => ({ ...f, subject: e.target.value }))}
+                placeholder="e.g. Mathematics"
+                autoFocus
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="tt-teacher">Teacher</Label>
+              <Input
+                id="tt-teacher"
+                value={form.teacher}
+                onChange={(e) => setForm((f) => ({ ...f, teacher: e.target.value }))}
+                placeholder="e.g. Ms. Priya Sharma"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="tt-room">Room / Classroom</Label>
+              <Input
+                id="tt-room"
+                value={form.room}
+                onChange={(e) => setForm((f) => ({ ...f, room: e.target.value }))}
+                placeholder="e.g. Room 101"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-1.5">
+                <Label htmlFor="tt-start">Start time</Label>
+                <Input
+                  id="tt-start"
+                  value={form.start}
+                  onChange={(e) => setForm((f) => ({ ...f, start: e.target.value }))}
+                  placeholder="8:00 AM"
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="tt-end">End time</Label>
+                <Input
+                  id="tt-end"
+                  value={form.end}
+                  onChange={(e) => setForm((f) => ({ ...f, end: e.target.value }))}
+                  placeholder="8:45 AM"
+                />
+              </div>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="tt-notes">Notes (optional)</Label>
+              <Textarea
+                id="tt-notes"
+                value={form.notes}
+                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                placeholder="Anything to remember for this class"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="sm:justify-between">
+            {editingExisting ? (
+              <Button variant="outline" onClick={deleteEntry} className="gap-2 text-destructive">
+                <Trash2 className="size-4" />
+                Delete
+              </Button>
+            ) : (
+              <span />
+            )}
+            <div className="flex gap-2">
+              <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+              <Button onClick={commitEntry} disabled={!form.subject.trim()}>
+                {editingExisting ? "Save changes" : "Add class"}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Empty state                                                                */
+/*  Presentational pieces                                                      */
 /* -------------------------------------------------------------------------- */
 
-function EmptyState() {
+function FilterDropdown({
+  label,
+  value,
+  options,
+  onSelect,
+}: {
+  label: string
+  value: string
+  options: string[]
+  onSelect: (value: string) => void
+}) {
   return (
-    <Card className="items-center gap-3 p-12 text-center">
-      <span className="grid size-14 place-items-center rounded-2xl bg-brand-muted text-brand">
-        <CalendarX2 className="size-7" />
+    <div className="flex flex-col gap-1.5">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button variant="outline" className="h-10 w-44 justify-between gap-2 rounded-xl px-3">
+              <span className="truncate font-medium text-foreground">{value}</span>
+              <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+            </Button>
+          }
+        />
+        <DropdownMenuContent className="max-h-72 w-44 overflow-y-auto">
+          {options.map((option) => (
+            <DropdownMenuItem key={option} onClick={() => onSelect(option)}>
+              {option}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  )
+}
+
+function TimetableCell({ entry, onClick }: { entry: Entry; onClick: () => void }) {
+  const accent = accentFor(entry.subject)
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative flex h-full min-h-[64px] w-full flex-col overflow-hidden rounded-lg border border-border py-1.5 pl-3 pr-2 text-left transition-shadow hover:shadow-sm ${accent.bg}`}
+    >
+      <span className={`absolute left-0 top-0 h-full w-1 ${accent.bar}`} aria-hidden />
+      <span className="text-[13px] font-semibold leading-tight text-foreground">{entry.subject}</span>
+      {entry.teacher && (
+        <span className="mt-0.5 truncate text-[11px] leading-tight text-muted-foreground">{entry.teacher}</span>
+      )}
+      {entry.room && (
+        <span className="mt-0.5 flex items-center gap-1 text-[11px] leading-tight text-muted-foreground">
+          <MapPin className="size-3 shrink-0" />
+          <span className="truncate">{entry.room}</span>
+        </span>
+      )}
+    </button>
+  )
+}
+
+function EmptyCell({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Add class"
+      className="group flex h-full min-h-[64px] w-full items-center justify-center rounded-lg border border-dashed border-transparent text-muted-foreground/40 transition-colors hover:border-border hover:bg-muted/40 hover:text-brand"
+    >
+      <Plus className="hidden size-4 group-hover:block" />
+      <span className="text-sm group-hover:hidden" aria-hidden>
+        —
       </span>
-      <h2 className="font-display text-lg font-semibold text-foreground">No timetable available</h2>
-      <p className="max-w-sm text-sm text-muted-foreground">
-        Your school has not published a timetable for this child yet.
-      </p>
-    </Card>
+    </button>
   )
 }
