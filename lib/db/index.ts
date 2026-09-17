@@ -536,3 +536,63 @@ export function ensurePostHidesTable(): Promise<void> {
   }
   return postHidesReady
 }
+
+/**
+ * Lazily provisions the parent-child tables (schema: public) using the shared
+ * pool, following the exact same idempotent (`IF NOT EXISTS`), memoized,
+ * schema-qualified pattern as the helpers above. No foreign keys to `neon_auth`,
+ * matching the existing Aspira convention.
+ *
+ * `public.parent_child` is the single source of truth for a parent's children.
+ * `parent_user_id` is ALWAYS the authenticated session user at write time, never
+ * trusted from the browser. Only account-less children are supported today, so
+ * `child_user_id` stays nullable (reserved for future real-student linking) and
+ * `status` defaults to `unlinked`. There is intentionally NO progress/
+ * performance column.
+ *
+ * `public.parent_child_seeds` is a tiny per-parent marker table so the built-in
+ * demo children (Aarav/Saanvi) are seeded at most ONCE for the demo parent and
+ * never reappear after they are deleted. It exists purely to make the one-time
+ * seed safe and idempotent; it stores no child data.
+ */
+let parentChildReady: Promise<void> | null = null
+export function ensureParentChildTable(): Promise<void> {
+  if (!parentChildReady) {
+    parentChildReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.parent_child (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          parent_user_id uuid NOT NULL,
+          child_user_id uuid,
+          status text NOT NULL DEFAULT 'unlinked',
+          name text NOT NULL,
+          class_name text,
+          school text,
+          relationship text,
+          dob text,
+          avatar text,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      // Covers "list this parent's children, oldest first" — the only hot path.
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS parent_child_parent_created
+        ON public.parent_child (parent_user_id, created_at)
+      `)
+      // One-time seed marker per parent. The PK makes claiming the marker an
+      // atomic, race-safe "seed exactly once" guard.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.parent_child_seeds (
+          parent_user_id uuid PRIMARY KEY,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+    })().catch((error) => {
+      // Reset so a transient failure can be retried on the next call.
+      parentChildReady = null
+      throw error
+    })
+  }
+  return parentChildReady
+}
