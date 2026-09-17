@@ -3,8 +3,13 @@
 /**
  * Parent → Timetable (FRONTEND-ONLY prototype).
  *
- * A single, filter-driven, editable timetable:
- *   Institution Type → Class → Section → monthly period grid → edit/add/delete → Save.
+ * A flexible, parent-managed weekly timetable:
+ *   Institution Type → Class → Section → editable weekly grid → Save.
+ *
+ * The grid is a recurring WEEKLY timetable (Mon–Sun by default), NOT a calendar.
+ * The parent fully controls both rows (periods) and columns (days / custom
+ * entries): add/delete rows, add/delete/rename columns, add an entire timetable
+ * when none exists, and delete the whole timetable.
  *
  * Persistence is intentionally frontend-only (localStorage), keyed per
  * child + institution-type + class + section, so each combination keeps its own
@@ -12,7 +17,7 @@
  * coupling here — that arrives when the real School Admin backend is built.
  */
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import {
@@ -25,6 +30,7 @@ import {
   Plus,
   Save,
   Trash2,
+  X,
 } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -62,36 +68,45 @@ interface Entry {
   notes: string
 }
 
-/** grid[periodId][dayKey] -> entry (or null for an empty slot). */
-type Grid = Record<string, Record<string, Entry | null>>
-
-interface Period {
+interface Column {
   id: string
-  label: string
-  time: string
-  start: string
-  end: string
+  name: string
 }
 
-const PERIODS: Period[] = [
-  { id: "p1", label: "1", time: "8:00 AM – 8:45 AM", start: "8:00 AM", end: "8:45 AM" },
-  { id: "p2", label: "2", time: "8:45 AM – 9:30 AM", start: "8:45 AM", end: "9:30 AM" },
-  { id: "p3", label: "3", time: "9:45 AM – 10:30 AM", start: "9:45 AM", end: "10:30 AM" },
-  { id: "p4", label: "4", time: "10:30 AM – 11:15 AM", start: "10:30 AM", end: "11:15 AM" },
-  { id: "p5", label: "5", time: "11:30 AM – 12:15 PM", start: "11:30 AM", end: "12:15 PM" },
-  { id: "p6", label: "6", time: "12:15 PM – 1:00 PM", start: "12:15 PM", end: "1:00 PM" },
-  { id: "p7", label: "7", time: "1:45 PM – 2:30 PM", start: "1:45 PM", end: "2:30 PM" },
-  { id: "p8", label: "8", time: "2:30 PM – 3:15 PM", start: "2:30 PM", end: "3:15 PM" },
+interface Row {
+  id: string
+  time: string
+}
+
+/** cells[rowId][colId] -> entry (or null for an empty slot). */
+type Cells = Record<string, Record<string, Entry | null>>
+
+interface Timetable {
+  columns: Column[]
+  rows: Row[]
+  cells: Cells
+}
+
+const DEFAULT_DAYS: { id: string; name: string }[] = [
+  { id: "mon", name: "Mon" },
+  { id: "tue", name: "Tue" },
+  { id: "wed", name: "Wed" },
+  { id: "thu", name: "Thu" },
+  { id: "fri", name: "Fri" },
+  { id: "sat", name: "Sat" },
+  { id: "sun", name: "Sun" },
 ]
 
-const DAYS = [
-  { key: "mon", name: "Mon" },
-  { key: "tue", name: "Tue" },
-  { key: "wed", name: "Wed" },
-  { key: "thu", name: "Thu" },
-  { key: "fri", name: "Fri" },
-  { key: "sat", name: "Sat" },
-] as const
+const SEED_TIMES = [
+  "8:00 AM – 8:45 AM",
+  "8:45 AM – 9:30 AM",
+  "9:45 AM – 10:30 AM",
+  "10:30 AM – 11:15 AM",
+  "11:30 AM – 12:15 PM",
+  "12:15 PM – 1:00 PM",
+  "1:45 PM – 2:30 PM",
+  "2:30 PM – 3:15 PM",
+]
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -223,64 +238,60 @@ const SCHOOL_SEED: (readonly [string, string, string] | null)[][] = [
   [null, null, null, null, null, null],
 ]
 
-function emptyGrid(): Grid {
-  const grid: Grid = {}
-  for (const period of PERIODS) {
-    grid[period.id] = {}
-    for (const day of DAYS) grid[period.id][day.key] = null
-  }
-  return grid
+/** A fresh weekly timetable: Mon–Sun columns + one blank row. */
+function blankTimetable(): Timetable {
+  const columns: Column[] = DEFAULT_DAYS.map((d) => ({ id: d.id, name: d.name }))
+  const rows: Row[] = [{ id: "r1", time: "" }]
+  const cells: Cells = { r1: {} }
+  for (const col of columns) cells.r1[col.id] = null
+  return { columns, rows, cells }
 }
 
 /**
- * Default grid for a filter combination. Only the reference combination
+ * Default timetable for a filter combination. Only the reference combination
  * (School · Class 8 · A) is seeded with sample classes; every other
- * combination starts empty and ready to fill in.
+ * combination has NO timetable until the parent adds one.
  */
-function seedGrid(type: InstitutionType, klass: string, section: string): Grid {
-  const grid = emptyGrid()
-  if (type === "school" && klass === "Class 8" && section === "A") {
-    PERIODS.forEach((period, pIndex) => {
-      DAYS.forEach((day, dIndex) => {
-        const seed = SCHOOL_SEED[pIndex]?.[dIndex]
-        if (seed) {
-          grid[period.id][day.key] = {
-            subject: seed[0],
-            teacher: seed[1],
-            room: seed[2],
-            start: period.start,
-            end: period.end,
-            notes: "",
-          }
-        }
-      })
+function seedTimetable(type: InstitutionType, klass: string, section: string): Timetable | null {
+  if (!(type === "school" && klass === "Class 8" && section === "A")) return null
+
+  const columns: Column[] = DEFAULT_DAYS.map((d) => ({ id: d.id, name: d.name }))
+  const rows: Row[] = SEED_TIMES.map((time, i) => ({ id: `r${i + 1}`, time: `${i + 1} · ${time}` }))
+  const cells: Cells = {}
+  const [start, end] = ["", ""]
+
+  rows.forEach((row, rIndex) => {
+    cells[row.id] = {}
+    columns.forEach((col, cIndex) => {
+      const seed = SCHOOL_SEED[rIndex]?.[cIndex]
+      cells[row.id][col.id] = seed
+        ? { subject: seed[0], teacher: seed[1], room: seed[2], start, end, notes: "" }
+        : null
     })
-  }
-  return grid
+  })
+
+  return { columns, rows, cells }
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Date helpers (month → first consecutive Mon–Sat within that month)         */
+/*  Persistence helpers                                                        */
 /* -------------------------------------------------------------------------- */
 
-function weekDatesForMonth(viewDate: Date): Date[] {
-  const year = viewDate.getFullYear()
-  const month = viewDate.getMonth()
-  const first = new Date(year, month, 1)
-  // Date of the first Monday of the month (getDay: Sun=0 … Sat=6).
-  const firstMonday = 1 + ((8 - first.getDay()) % 7)
-  return DAYS.map((_, i) => new Date(year, month, firstMonday + i))
-}
+const DELETED_MARKER = "__deleted__"
 
 function storageKey(childId: string, type: InstitutionType, klass: string, section: string) {
-  return `aspira:timetable:v1:${childId}:${type}:${klass}:${section}`
+  return `aspira:timetable:v2:${childId}:${type}:${klass}:${section}`
 }
 
-function readGrid(key: string): Grid | null {
+/** Returns the stored timetable, the "deleted" sentinel, or null if untouched. */
+function readStore(key: string): Timetable | typeof DELETED_MARKER | null {
   if (typeof window === "undefined") return null
   try {
     const raw = window.localStorage.getItem(key)
-    return raw ? (JSON.parse(raw) as Grid) : null
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Timetable | { deleted: true }
+    if ("deleted" in parsed && parsed.deleted) return DELETED_MARKER
+    return parsed as Timetable
   } catch {
     return null
   }
@@ -303,66 +314,168 @@ export function TimetableView() {
   const [klass, setKlass] = useState("Class 8")
   const [section, setSection] = useState("A")
 
-  // Month navigation (first day of the visible month).
+  // Month navigation (label only — the grid is a recurring weekly timetable).
   const [viewDate, setViewDate] = useState(() => {
     const now = new Date()
     return new Date(now.getFullYear(), now.getMonth(), 1)
   })
 
   // Timetable state + persistence bookkeeping.
-  const [grid, setGrid] = useState<Grid>(() => seedGrid("school", "Class 8", "A"))
+  const [timetable, setTimetable] = useState<Timetable | null>(() => seedTimetable("school", "Class 8", "A"))
   const [dirty, setDirty] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
 
+  // Monotonic id generator for dynamically added rows/columns.
+  const idCounter = useRef(0)
+  const nextId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${idCounter.current++}`
+
   const key = storageKey(childId, type, klass, section)
 
-  // Load the stored grid (or a fresh seed) whenever the active combination changes.
+  // Load the stored timetable (or a fresh seed) whenever the combination changes.
   useEffect(() => {
-    setGrid(readGrid(key) ?? seedGrid(type, klass, section))
+    const stored = readStore(key)
+    if (stored === DELETED_MARKER) setTimetable(null)
+    else if (stored) setTimetable(stored)
+    else setTimetable(seedTimetable(type, klass, section))
     setDirty(false)
     setJustSaved(false)
   }, [key, type, klass, section])
 
-  const weekDates = useMemo(() => weekDatesForMonth(viewDate), [viewDate])
   const monthLabel = `${MONTHS[viewDate.getMonth()]} ${viewDate.getFullYear()}`
 
   // Editing dialog.
-  const [editing, setEditing] = useState<{ periodId: string; dayKey: string } | null>(null)
+  const [editing, setEditing] = useState<{ rowId: string; colId: string } | null>(null)
   const [form, setForm] = useState<Entry>({ subject: "", teacher: "", room: "", start: "", end: "", notes: "" })
 
-  function openEditor(periodId: string, dayKey: string) {
-    const existing = grid[periodId]?.[dayKey]
-    const period = PERIODS.find((p) => p.id === periodId)!
-    setForm(
-      existing ?? { subject: "", teacher: "", room: "", start: period.start, end: period.end, notes: "" },
-    )
-    setEditing({ periodId, dayKey })
+  // Add-column dialog.
+  const [addingColumn, setAddingColumn] = useState(false)
+  const [newColumnName, setNewColumnName] = useState("")
+
+  // Delete-timetable confirmation.
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  function markChanged() {
+    setDirty(true)
+    setJustSaved(false)
+  }
+
+  function openEditor(rowId: string, colId: string) {
+    const existing = timetable?.cells[rowId]?.[colId]
+    setForm(existing ?? { subject: "", teacher: "", room: "", start: "", end: "", notes: "" })
+    setEditing({ rowId, colId })
   }
 
   function commitEntry() {
     if (!editing || !form.subject.trim()) return
-    const { periodId, dayKey } = editing
-    setGrid((prev) => ({
-      ...prev,
-      [periodId]: { ...prev[periodId], [dayKey]: { ...form, subject: form.subject.trim() } },
-    }))
-    setDirty(true)
-    setJustSaved(false)
+    const { rowId, colId } = editing
+    setTimetable((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        cells: {
+          ...prev.cells,
+          [rowId]: { ...prev.cells[rowId], [colId]: { ...form, subject: form.subject.trim() } },
+        },
+      }
+    })
+    markChanged()
     setEditing(null)
   }
 
   function deleteEntry() {
     if (!editing) return
-    const { periodId, dayKey } = editing
-    setGrid((prev) => ({ ...prev, [periodId]: { ...prev[periodId], [dayKey]: null } }))
-    setDirty(true)
-    setJustSaved(false)
+    const { rowId, colId } = editing
+    setTimetable((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        cells: { ...prev.cells, [rowId]: { ...prev.cells[rowId], [colId]: null } },
+      }
+    })
+    markChanged()
     setEditing(null)
+  }
+
+  function updateRowTime(rowId: string, time: string) {
+    setTimetable((prev) => {
+      if (!prev) return prev
+      return { ...prev, rows: prev.rows.map((r) => (r.id === rowId ? { ...r, time } : r)) }
+    })
+    markChanged()
+  }
+
+  function addRow() {
+    setTimetable((prev) => {
+      if (!prev) return prev
+      const id = nextId("row")
+      const rowCells: Record<string, Entry | null> = {}
+      for (const col of prev.columns) rowCells[col.id] = null
+      return { ...prev, rows: [...prev.rows, { id, time: "" }], cells: { ...prev.cells, [id]: rowCells } }
+    })
+    markChanged()
+  }
+
+  function deleteRow(rowId: string) {
+    setTimetable((prev) => {
+      if (!prev) return prev
+      const cells = { ...prev.cells }
+      delete cells[rowId]
+      return { ...prev, rows: prev.rows.filter((r) => r.id !== rowId), cells }
+    })
+    markChanged()
+  }
+
+  function addColumn() {
+    const name = newColumnName.trim()
+    if (!name) return
+    setTimetable((prev) => {
+      if (!prev) return prev
+      const id = nextId("col")
+      const cells: Cells = {}
+      for (const row of prev.rows) cells[row.id] = { ...prev.cells[row.id], [id]: null }
+      return { ...prev, columns: [...prev.columns, { id, name }], cells }
+    })
+    markChanged()
+    setNewColumnName("")
+    setAddingColumn(false)
+  }
+
+  function deleteColumn(colId: string) {
+    setTimetable((prev) => {
+      if (!prev) return prev
+      const cells: Cells = {}
+      for (const row of prev.rows) {
+        const rowCells = { ...prev.cells[row.id] }
+        delete rowCells[colId]
+        cells[row.id] = rowCells
+      }
+      return { ...prev, columns: prev.columns.filter((c) => c.id !== colId), cells }
+    })
+    markChanged()
+  }
+
+  function addTimetable() {
+    setTimetable(blankTimetable())
+    markChanged()
+  }
+
+  function deleteTimetable() {
+    setTimetable(null)
+    setConfirmDelete(false)
+    // Persist the deletion immediately so a refresh keeps the empty state.
+    try {
+      window.localStorage.setItem(key, JSON.stringify({ deleted: true }))
+    } catch {
+      // Ignore storage failures (e.g. private mode); prototype persistence only.
+    }
+    setDirty(false)
+    setJustSaved(false)
   }
 
   function saveTimetable() {
     try {
-      window.localStorage.setItem(key, JSON.stringify(grid))
+      if (timetable) window.localStorage.setItem(key, JSON.stringify(timetable))
+      else window.localStorage.setItem(key, JSON.stringify({ deleted: true }))
       setDirty(false)
       setJustSaved(true)
       window.setTimeout(() => setJustSaved(false), 2200)
@@ -381,7 +494,8 @@ export function TimetableView() {
     setSection("A")
   }
 
-  const editingExisting = editing ? Boolean(grid[editing.periodId]?.[editing.dayKey]) : false
+  const editingExisting = editing ? Boolean(timetable?.cells[editing.rowId]?.[editing.colId]) : false
+  const columnCount = timetable ? timetable.columns.length + 1 : 1
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -499,85 +613,160 @@ export function TimetableView() {
           {CLASS_LABEL[type]}: {klass}
         </Badge>
         <Badge variant="outline">Section: {section}</Badge>
-        {dirty && (
-          <span className="ml-auto text-xs font-medium text-amber-600">Unsaved changes</span>
+        {timetable && (
+          <div className="ml-auto flex items-center gap-2">
+            {dirty && <span className="text-xs font-medium text-amber-600">Unsaved changes</span>}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setConfirmDelete(true)}
+              className="h-8 gap-1.5 rounded-lg text-destructive hover:text-destructive"
+            >
+              <Trash2 className="size-3.5" />
+              Delete Timetable
+            </Button>
+          </div>
         )}
       </div>
 
-      {/* Timetable grid */}
-      <div className="overflow-x-auto rounded-xl border border-border bg-card">
-        <table className="w-full min-w-[900px] border-separate border-spacing-0 text-sm">
-          <caption className="sr-only">
-            {`Timetable for ${klass} section ${section}, ${monthLabel}`}
-          </caption>
-          <thead>
-            <tr>
-              <th className="sticky left-0 z-20 min-w-[150px] border-b border-r border-border bg-muted/60 px-3 py-3 text-left text-xs font-semibold text-foreground">
-                Period / Time
-              </th>
-              {DAYS.map((day, i) => (
-                <th
-                  key={day.key}
-                  className="min-w-[150px] border-b border-r border-border bg-muted/60 px-3 py-2 text-center last:border-r-0"
-                  scope="col"
-                >
-                  <div className="text-xs font-semibold text-foreground">{day.name}</div>
-                  <div className="text-[11px] text-muted-foreground">
-                    {weekDates[i].toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                  </div>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {PERIODS.map((period) => (
-              <tr key={period.id}>
-                <th
-                  scope="row"
-                  className="sticky left-0 z-10 min-w-[150px] border-b border-r border-border bg-card px-3 py-2 text-left align-top"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border text-xs font-semibold text-muted-foreground">
-                      {period.label}
-                    </span>
-                    <span className="whitespace-nowrap text-[11px] font-medium text-muted-foreground">
-                      {period.time}
-                    </span>
-                  </div>
-                </th>
-                {DAYS.map((day) => {
-                  const entry = grid[period.id]?.[day.key]
-                  return (
-                    <td
-                      key={day.key}
-                      className="border-b border-r border-border p-1.5 align-top last:border-r-0"
+      {timetable ? (
+        <>
+          {/* Timetable grid */}
+          <div className="overflow-x-auto rounded-xl border border-border bg-card">
+            <table
+              className="w-full border-separate border-spacing-0 text-sm"
+              style={{ minWidth: `${150 + timetable.columns.length * 150}px` }}
+            >
+              <caption className="sr-only">
+                {`Weekly timetable for ${klass} section ${section}`}
+              </caption>
+              <thead>
+                <tr>
+                  <th className="sticky left-0 z-20 min-w-[160px] border-b border-r border-border bg-muted/60 px-3 py-3 text-left text-xs font-semibold text-foreground">
+                    Period / Time
+                  </th>
+                  {timetable.columns.map((col) => (
+                    <th
+                      key={col.id}
+                      className="group min-w-[150px] border-b border-r border-border bg-muted/60 px-3 py-2 text-center last:border-r-0"
+                      scope="col"
                     >
-                      {entry ? (
-                        <TimetableCell entry={entry} onClick={() => openEditor(period.id, day.key)} />
-                      ) : (
-                        <EmptyCell onClick={() => openEditor(period.id, day.key)} />
-                      )}
-                    </td>
-                  )
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                      <div className="flex items-center justify-center gap-1">
+                        <span className="text-xs font-semibold text-foreground">{col.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => deleteColumn(col.id)}
+                          aria-label={`Remove ${col.name} column`}
+                          className="grid size-4 shrink-0 place-items-center rounded text-muted-foreground/50 transition-colors hover:bg-destructive/10 hover:text-destructive"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {timetable.rows.map((row, rIndex) => (
+                  <tr key={row.id}>
+                    <th
+                      scope="row"
+                      className="sticky left-0 z-10 min-w-[160px] border-b border-r border-border bg-card px-2 py-2 text-left align-top"
+                    >
+                      <div className="flex items-start gap-1.5">
+                        <span className="mt-1 grid size-6 shrink-0 place-items-center rounded-full border border-border text-xs font-semibold text-muted-foreground">
+                          {rIndex + 1}
+                        </span>
+                        <Input
+                          value={row.time}
+                          onChange={(e) => updateRowTime(row.id, e.target.value)}
+                          placeholder="e.g. 8:00 AM – 8:45 AM"
+                          aria-label={`Time for period ${rIndex + 1}`}
+                          className="h-8 flex-1 text-[11px]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => deleteRow(row.id)}
+                          aria-label={`Delete period ${rIndex + 1}`}
+                          className="mt-1 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground/50 transition-colors hover:bg-destructive/10 hover:text-destructive"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </div>
+                    </th>
+                    {timetable.columns.map((col) => {
+                      const entry = timetable.cells[row.id]?.[col.id]
+                      return (
+                        <td
+                          key={col.id}
+                          className="border-b border-r border-border p-1.5 align-top last:border-r-0"
+                        >
+                          {entry ? (
+                            <TimetableCell entry={entry} onClick={() => openEditor(row.id, col.id)} />
+                          ) : (
+                            <EmptyCell onClick={() => openEditor(row.id, col.id)} />
+                          )}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={columnCount} className="border-t border-border p-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={addRow} className="h-9 gap-1.5 rounded-lg">
+                        <Plus className="size-4" />
+                        Add Row
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setAddingColumn(true)}
+                        className="h-9 gap-1.5 rounded-lg"
+                      >
+                        <Plus className="size-4" />
+                        Add Column
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
 
-      {/* Footer notes */}
-      <div className="mt-6 flex flex-col items-center gap-1 text-center">
-        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-          <Info className="size-4" />
-          Tap any cell to add, edit, or remove a class. Remember to Save.
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Prototype: changes are saved on this device only, per class &amp; section.
-        </p>
-      </div>
+          {/* Footer notes */}
+          <div className="mt-6 flex flex-col items-center gap-1 text-center">
+            <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <Info className="size-4" />
+              Tap any cell to add, edit, or remove a class. Remember to Save.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Prototype: changes are saved on this device only, per class &amp; section.
+            </p>
+          </div>
+        </>
+      ) : (
+        /* Empty state — no timetable for this combination yet */
+        <div className="flex flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border bg-card px-6 py-16 text-center">
+          <div className="grid size-12 place-items-center rounded-full bg-muted text-muted-foreground">
+            <Info className="size-6" />
+          </div>
+          <div>
+            <p className="font-display text-lg font-semibold text-foreground">No timetable added yet</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Create a weekly timetable for {klass} · Section {section}.
+            </p>
+          </div>
+          <Button onClick={addTimetable} className="gap-2 rounded-xl">
+            <Plus className="size-4" />
+            Add Timetable
+          </Button>
+        </div>
+      )}
 
-      {/* Edit / add dialog */}
+      {/* Edit / add class dialog */}
       <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
         <DialogContent>
           <DialogHeader>
@@ -662,6 +851,62 @@ export function TimetableView() {
                 {editingExisting ? "Save changes" : "Add class"}
               </Button>
             </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add-column dialog */}
+      <Dialog
+        open={addingColumn}
+        onOpenChange={(open) => {
+          if (!open) {
+            setAddingColumn(false)
+            setNewColumnName("")
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add column</DialogTitle>
+            <DialogDescription>Name the new day or custom column (e.g. Holiday, Lab Day).</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-1.5">
+            <Label htmlFor="tt-col-name">Column name</Label>
+            <Input
+              id="tt-col-name"
+              value={newColumnName}
+              onChange={(e) => setNewColumnName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.nativeEvent.isComposing && e.keyCode !== 229) addColumn()
+              }}
+              placeholder="e.g. Holiday"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button onClick={addColumn} disabled={!newColumnName.trim()}>
+              Add Column
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete-timetable confirmation */}
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete this timetable?</DialogTitle>
+            <DialogDescription>
+              This will remove the entire timetable. You can add a new one later.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button onClick={deleteTimetable} className="gap-2 bg-destructive text-white hover:bg-destructive/90">
+              <Trash2 className="size-4" />
+              Delete Timetable
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
