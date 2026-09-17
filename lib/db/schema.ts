@@ -342,3 +342,42 @@ export const postHides = pgTable('post_hides', {
   userId: uuid('user_id').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })
+
+/**
+ * Parent-child roster (schema: public). ONE row = one child belonging to one
+ * parent. This is the single source of truth for a parent's children, replacing
+ * the previous localStorage arrangement. `parent_user_id` is ALWAYS the
+ * authenticated session user at write time, never trusted from the browser.
+ *
+ * Only account-less children are supported today: `child_user_id` stays nullable
+ * (reserved for a future real-student linking feature — NOT implemented here)
+ * and `status` defaults to `unlinked`. `class_name` maps to the UI's `className`
+ * field. There is intentionally NO progress/performance column. Following the
+ * existing Aspira convention this carries no foreign keys to `neon_auth.user`;
+ * it is provisioned lazily by `ensureParentChildTable` (see `lib/db/index.ts`).
+ */
+export const parentChild = pgTable('parent_child', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  parentUserId: uuid('parent_user_id').notNull(),
+  childUserId: uuid('child_user_id'),
+  status: text('status').notNull().default('unlinked'),
+  name: text('name').notNull(),
+  className: text('class_name'),
+  school: text('school'),
+  relationship: text('relationship'),
+  dob: text('dob'),
+  avatar: text('avatar'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * Per-parent one-time seed marker (schema: public). A row means the built-in
+ * demo children have already been seeded for this parent, so they are created at
+ * most once and never reappear after deletion. Stores no child data. Provisioned
+ * lazily by `ensureParentChildTable` (see `lib/db/index.ts`).
+ */
+export const parentChildSeeds = pgTable('parent_child_seeds', {
+  parentUserId: uuid('parent_user_id').primaryKey(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})

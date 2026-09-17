@@ -29,9 +29,10 @@ function SectionHeader({ title, href }: { title: string; href: string }) {
 }
 
 export function RightSidebar() {
-  // Same persisted source of truth used by My Children and the Timetable selector, so a newly
+  // Same DB-backed source of truth used by My Children and the Timetable selector, so a newly
   // added child shows up here immediately (and after navigation/refresh) with no separate list.
-  const { children } = useChildrenStore()
+  const { children, hydrated } = useChildrenStore()
+  const hasChildren = children.length > 0
   // The School Notifications preview reads the SAME published School Updates data as the full page,
   // scoped to the child's school. Newest first; only a short preview is shown here.
   const { updates, isRead } = useSchoolUpdatesStore()
@@ -42,37 +43,52 @@ export function RightSidebar() {
       {/* My Children */}
       <Card className="p-5">
         <SectionHeader title="My Children" href="/parent/children" />
-        <div className="grid gap-3">
-          {children.map((child) => (
-            <Link
-              key={child.id}
-              href={`/parent/children`}
-              className="flex items-center gap-3 rounded-xl p-1.5 transition-colors hover:bg-muted"
+        {hydrated && !hasChildren ? (
+          <div className="grid gap-3 text-center">
+            <p className="text-sm text-muted-foreground">No children added yet.</p>
+            <Button
+              render={<Link href="/parent/children?add=1" />}
+              variant="outline"
+              className="w-full gap-1.5 rounded-xl border-dashed border-brand/40 text-brand hover:bg-brand-muted"
             >
-              <div className="relative">
-                <Avatar size="lg" className="size-11">
-                  <AvatarImage src={child.avatar} alt={child.name} />
-                  <AvatarFallback>{child.name[0]}</AvatarFallback>
-                </Avatar>
-                {child.online && (
-                  <span className="absolute bottom-0 right-0 size-3 rounded-full bg-success ring-2 ring-card" />
-                )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-foreground">{child.name}</p>
-                <p className="text-xs text-muted-foreground">{child.className}</p>
-                <p className="truncate text-xs text-muted-foreground">{child.school}</p>
-              </div>
-            </Link>
-          ))}
-        </div>
-        <Button
-          render={<Link href="/parent/children" />}
-          variant="outline"
-          className="mt-4 w-full gap-1.5 rounded-xl border-dashed border-brand/40 text-brand hover:bg-brand-muted"
-        >
-          <Plus className="size-4" /> Add Another Child
-        </Button>
+              <Plus className="size-4" /> Add Child
+            </Button>
+          </div>
+        ) : (
+          <>
+            <div className="grid gap-3">
+              {children.map((child) => (
+                <Link
+                  key={child.id}
+                  href={`/parent/children`}
+                  className="flex items-center gap-3 rounded-xl p-1.5 transition-colors hover:bg-muted"
+                >
+                  <div className="relative">
+                    <Avatar size="lg" className="size-11">
+                      <AvatarImage src={child.avatar} alt={child.name} />
+                      <AvatarFallback>{child.name[0]}</AvatarFallback>
+                    </Avatar>
+                    {child.online && (
+                      <span className="absolute bottom-0 right-0 size-3 rounded-full bg-success ring-2 ring-card" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-foreground">{child.name}</p>
+                    <p className="text-xs text-muted-foreground">{child.className}</p>
+                    <p className="truncate text-xs text-muted-foreground">{child.school}</p>
+                  </div>
+                </Link>
+              ))}
+            </div>
+            <Button
+              render={<Link href="/parent/children?add=1" />}
+              variant="outline"
+              className="mt-4 w-full gap-1.5 rounded-xl border-dashed border-brand/40 text-brand hover:bg-brand-muted"
+            >
+              <Plus className="size-4" /> Add Another Child
+            </Button>
+          </>
+        )}
       </Card>
 
       {/* Upcoming Events */}

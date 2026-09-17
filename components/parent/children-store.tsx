@@ -1,78 +1,87 @@
 "use client"
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
-import { CHILDREN, type Child } from "@/lib/parent-data"
+import { createContext, useContext, useMemo, type ReactNode } from "react"
+import useSWR from "swr"
+import { useAuth } from "@/lib/auth-context"
+import type { Child } from "@/lib/parent-data"
+import {
+  addChild as addChildAction,
+  deleteChild as deleteChildAction,
+  listChildren,
+  updateChild as updateChildAction,
+  type ChildInput,
+} from "@/app/actions/children"
 
 /**
  * Single source of truth for the signed-in parent's children.
  *
- * The whole roster (seeded sample children plus any the parent adds) is persisted to localStorage
- * so the same list drives My Children, the Parent Dashboard sidebar and the Timetable child
- * selector. Add/edit/delete all mutate this one list, so every consumer updates together and the
- * changes survive a refresh. This mirrors the social-store persistence pattern and keeps child
- * state from being duplicated across unrelated components.
+ * The DATABASE is authoritative: the roster comes from `public.parent_child`
+ * via `listChildren` (server action), scoped to the Better Auth session user, so
+ * it survives refresh, logout/login, and other devices. There is NO localStorage
+ * source of truth. Add/edit/delete persist to the DB and then revalidate this
+ * one SWR cache, so My Children, the Parent Dashboard sidebar and the Timetable
+ * child selector all update together.
  */
 type ChildrenState = {
-  /** The full roster, in display order. */
+  /** The full roster, in display order (oldest first). */
   children: Child[]
+  /** True once the initial server load has resolved. */
   hydrated: boolean
-  /** Persist a new child and make it available everywhere children are listed. */
-  addChild: (child: Child) => void
-  /** Update an existing child's fields in place, everywhere it is shown. */
-  updateChild: (id: string, updates: Partial<Child>) => void
+  /** Persist a new child; the DB assigns its id. */
+  addChild: (input: ChildInput) => Promise<void>
+  /** Update an existing child's fields, everywhere it is shown. */
+  updateChild: (id: string, updates: Partial<ChildInput>) => Promise<void>
   /** Remove a child from the roster everywhere it is shown. */
-  deleteChild: (id: string) => void
+  deleteChild: (id: string) => Promise<void>
 }
 
 const ChildrenContext = createContext<ChildrenState | null>(null)
-const STORE_KEY = "aspira-parent-children"
-/** Previous key that stored only parent-added children; migrated on first load so nothing is lost. */
-const LEGACY_ADDED_KEY = "aspira-parent-added-children"
 
 export function ChildrenStoreProvider({ children: node }: { children: ReactNode }) {
-  // Start from the seeded roster so the very first render (pre-hydration) matches the sample data.
-  const [list, setList] = useState<Child[]>(CHILDREN)
-  const [hydrated, setHydrated] = useState(false)
+  // Gate the query on the app's own (server-verified) auth session rather than
+  // Better Auth's client `useSession()` hook. `useAuth()` resolves the user from
+  // the cookie via a server action, which is reliable inside the v0 preview
+  // iframe; the client-side get-session fetch could stay null on a hard refresh,
+  // which previously left a just-added child invisible until the next sign-in.
+  const { user, isReady } = useAuth()
+  const userId = user?.id ?? null
 
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORE_KEY)
-      if (stored) {
-        setList(JSON.parse(stored))
-        return
-      }
-      // First run under the full-roster store: seed with the sample children, merging any children
-      // added under the previous ("added children") key so earlier additions are preserved.
-      let seeded = [...CHILDREN]
-      const legacy = localStorage.getItem(LEGACY_ADDED_KEY)
-      if (legacy) {
-        const added: Child[] = JSON.parse(legacy)
-        seeded = [...seeded, ...added.filter((a) => !seeded.some((s) => s.id === a.id))]
-      }
-      setList(seeded)
-    } catch {
-    } finally {
-      setHydrated(true)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!hydrated) return
-    localStorage.setItem(STORE_KEY, JSON.stringify(list))
-  }, [hydrated, list])
-
-  const value = useMemo<ChildrenState>(
-    () => ({
-      children: list,
-      hydrated,
-      addChild: (child: Child) =>
-        setList((items) => (items.some((item) => item.id === child.id) ? items : [...items, child])),
-      updateChild: (id: string, updates: Partial<Child>) =>
-        setList((items) => items.map((item) => (item.id === id ? { ...item, ...updates } : item))),
-      deleteChild: (id: string) => setList((items) => items.filter((item) => item.id !== id)),
-    }),
-    [list, hydrated],
+  // Key by user id so a different user's cached roster is never reused after
+  // login/logout. Until we have a user (key null) nothing is fetched.
+  const { data, mutate } = useSWR(
+    userId ? ["children", userId] : null,
+    () => listChildren(),
+    { revalidateOnFocus: false },
   )
+
+  const value = useMemo<ChildrenState>(() => {
+    const list = data ?? []
+    return {
+      children: list,
+      // Loaded once the session has resolved and — when signed in — the first
+      // roster fetch has returned. Signed-out resolves immediately to empty.
+      hydrated: isReady && (userId === null || data !== undefined),
+      addChild: async (input: ChildInput) => {
+        const created = await addChildAction(input)
+        // Show it immediately, then reconcile against the DB (source of truth),
+        // so it never depends on refetch timing or a refresh to appear.
+        await mutate((current) => [...(current ?? []), created], { revalidate: true })
+      },
+      updateChild: async (id: string, updates: Partial<ChildInput>) => {
+        const updated = await updateChildAction(id, updates)
+        await mutate(
+          (current) => (current ?? []).map((child) => (child.id === id ? updated ?? child : child)),
+          { revalidate: true },
+        )
+      },
+      deleteChild: async (id: string) => {
+        await deleteChildAction(id)
+        await mutate((current) => (current ?? []).filter((child) => child.id !== id), {
+          revalidate: true,
+        })
+      },
+    }
+  }, [data, mutate, isReady, userId])
 
   return <ChildrenContext.Provider value={value}>{node}</ChildrenContext.Provider>
 }

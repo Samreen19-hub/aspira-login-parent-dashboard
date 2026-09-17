@@ -1,7 +1,8 @@
 "use client"
 
 import Link from "next/link"
-import { useRef, useState, type ChangeEvent } from "react"
+import { useEffect, useRef, useState, type ChangeEvent } from "react"
+import { useSearchParams } from "next/navigation"
 import { GraduationCap, School, Plus, MoreVertical, Pencil, Trash2, Camera, X } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
@@ -46,11 +47,21 @@ const FIELDS: { key: keyof Omit<ChildForm, "avatar">; label: string; type?: stri
 ]
 
 export default function ChildrenPage() {
-  const { children, addChild, updateChild, deleteChild } = useChildrenStore()
+  const { children, hydrated, addChild, updateChild, deleteChild } = useChildrenStore()
   // `null` = closed, "add" = new child, otherwise the id of the child being edited.
   const [editing, setEditing] = useState<null | "add" | string>(null)
   const [form, setForm] = useState<ChildForm>(EMPTY_FORM)
   const [pendingDelete, setPendingDelete] = useState<Child | null>(null)
+
+  // Open the Add Child dialog automatically when arriving via the sidebar's
+  // "Add Child" action (`/parent/children?add=1`), so it opens the same flow.
+  const searchParams = useSearchParams()
+  useEffect(() => {
+    if (searchParams.get("add") === "1") {
+      setForm(EMPTY_FORM)
+      setEditing("add")
+    }
+  }, [searchParams])
 
   function openAdd() {
     setForm(EMPTY_FORM)
@@ -75,7 +86,7 @@ export default function ChildrenPage() {
 
   const valid = form.name.trim() && form.className.trim() && form.school.trim()
 
-  function save() {
+  async function save() {
     if (!valid) return
     const shared = {
       name: form.name.trim(),
@@ -86,21 +97,37 @@ export default function ChildrenPage() {
       avatar: form.avatar || "/placeholder.svg",
     }
     if (editing === "add") {
-      addChild({ id: `child-${Date.now()}`, ...shared })
+      await addChild(shared)
     } else if (editing) {
-      updateChild(editing, shared)
+      await updateChild(editing, shared)
     }
     setEditing(null)
     setForm(EMPTY_FORM)
   }
 
-  function confirmDelete() {
-    if (pendingDelete) deleteChild(pendingDelete.id)
+  async function confirmDelete() {
+    if (pendingDelete) await deleteChild(pendingDelete.id)
     setPendingDelete(null)
   }
 
   return (
     <PageShell title="My Children" description="Manage your children's accounts.">
+      {hydrated && children.length === 0 ? (
+        <Card className="flex flex-col items-center justify-center gap-3 p-10 text-center">
+          <span className="grid size-12 place-items-center rounded-full bg-brand-muted text-brand">
+            <Plus className="size-6" />
+          </span>
+          <div className="grid gap-1">
+            <p className="font-display font-semibold text-foreground">No children added yet</p>
+            <p className="text-sm text-muted-foreground">
+              Add a child profile to see their feed and timetable.
+            </p>
+          </div>
+          <Button onClick={openAdd} className="gap-1.5 rounded-xl">
+            <Plus className="size-4" /> Add Child
+          </Button>
+        </Card>
+      ) : (
       <div className="grid gap-4 sm:grid-cols-2">
         {children.map((child) => (
           <Card key={child.id} className="gap-4 p-5">
@@ -165,6 +192,7 @@ export default function ChildrenPage() {
           <span className="text-sm font-medium">Add Another Child</span>
         </button>
       </div>
+      )}
 
       {/* Add / Edit dialog */}
       <Dialog open={editing !== null} onOpenChange={(next) => !next && setEditing(null)}>
