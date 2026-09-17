@@ -295,11 +295,26 @@ export async function getFeed(
     // is returned only when the viewer authored it, has an accepted connection
     // with the author, or follows the author. The author always sees their own.
     await ensureFollowsTable()
+    await ensureSpaceMembersTable()
     const allowedAuthorIds = await getVisibleHomeAuthorIds(meId)
-    scopeWhere = and(
+    // The Home Feed also surfaces Group/Community posts from every space the
+    // viewer belongs to, reusing the existing `space_members` relationship
+    // (group membership + community following) as the single source of truth.
+    const mySpaceSlugs = (
+      await db
+        .select({ slug: spaceMembers.slug })
+        .from(spaceMembers)
+        .where(eq(spaceMembers.userId, meId))
+    ).map((row) => row.slug)
+    // Normal Home Feed eligibility: unscoped posts by a visible author.
+    const normalEligible = and(
       sql`${posts.scope} IS NULL`,
       inArray(posts.authorId, allowedAuthorIds),
     )
+    // Include scoped posts whose scope matches one of the viewer's space slugs.
+    scopeWhere = mySpaceSlugs.length
+      ? or(normalEligible, inArray(posts.scope, mySpaceSlugs))
+      : normalEligible
   } else {
     // GROUP / COMMUNITY feeds keep their existing scope-based behavior. The
     // connection/follow rule is intentionally NOT applied here; access is
