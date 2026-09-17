@@ -167,16 +167,30 @@ export default function ChildrenPage() {
                 </DropdownMenu>
               </div>
             </div>
-            <div className="flex gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <Button
                 variant="outline"
-                className="flex-1 rounded-xl"
+                className="rounded-xl"
                 render={<Link href={`/parent/timetable?childId=${child.id}`} />}
               >
                 Timetable
               </Button>
-              <Button className="flex-1 rounded-xl" render={<Link href={`/parent/children/${child.id}/feed`} />}>
+              <Button className="rounded-xl" render={<Link href={`/parent/children/${child.id}/feed`} />}>
                 View Feed
+              </Button>
+              <Button
+                variant="outline"
+                className="rounded-xl"
+                render={<Link href="/parent/school-updates" />}
+              >
+                School Notifications
+              </Button>
+              <Button
+                variant="outline"
+                className="rounded-xl"
+                render={<Link href={`/parent/children/${child.id}/report-card`} />}
+              >
+                Report Card
               </Button>
             </div>
           </Card>
