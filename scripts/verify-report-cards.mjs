@@ -1,6 +1,15 @@
-import { neon } from '@neondatabase/serverless'
+import pg from 'pg'
 
-const sql = neon(process.env.DATABASE_URL)
+// Use the same `pg` driver the app uses (avoids a separate @neondatabase dep).
+// A small tagged-template shim keeps the existing sql`...` call sites intact.
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL })
+function sql(strings, ...values) {
+  const text = strings.reduce(
+    (acc, part, i) => acc + part + (i < values.length ? `$${i + 1}` : ''),
+    '',
+  )
+  return pool.query(text, values).then((r) => r.rows)
+}
 const tag = `verify_${Date.now()}`
 
 async function main() {
