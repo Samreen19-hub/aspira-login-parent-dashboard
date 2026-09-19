@@ -50,23 +50,42 @@ export async function GET(
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
-  // Parent authorization: the report's student is linked to one of my children.
-  const [parentLink] = await db
-    .select({ id: parentChild.id })
-    .from(parentChild)
-    .where(
-      and(
-        eq(parentChild.parentUserId, userId),
-        eq(parentChild.studentId, report.studentId),
-      ),
-    )
-    .limit(1)
+  let authorized = false
 
-  let authorized = Boolean(parentLink)
+  // Parent-owned report authorization: the report's parent_child row belongs to
+  // me. Never publicly accessible — only the owning parent passes this check.
+  if (report.parentChildId) {
+    const [owned] = await db
+      .select({ id: parentChild.id })
+      .from(parentChild)
+      .where(
+        and(
+          eq(parentChild.id, report.parentChildId),
+          eq(parentChild.parentUserId, userId),
+        ),
+      )
+      .limit(1)
+    authorized = Boolean(owned)
+  }
+
+  // Parent authorization: the report's student is linked to one of my children.
+  if (!authorized && report.studentId) {
+    const [parentLink] = await db
+      .select({ id: parentChild.id })
+      .from(parentChild)
+      .where(
+        and(
+          eq(parentChild.parentUserId, userId),
+          eq(parentChild.studentId, report.studentId),
+        ),
+      )
+      .limit(1)
+    authorized = Boolean(parentLink)
+  }
 
   // School-admin authorization (future-facing, same shared row): I administer
   // the school this report belongs to.
-  if (!authorized) {
+  if (!authorized && report.schoolId) {
     const [adminLink] = await db
       .select({ id: schoolAdmins.id })
       .from(schoolAdmins)

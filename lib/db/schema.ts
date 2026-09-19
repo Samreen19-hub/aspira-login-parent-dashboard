@@ -472,8 +472,21 @@ export const enrollments = pgTable('enrollments', {
  */
 export const reportCards = pgTable('report_cards', {
   id: uuid('id').primaryKey().defaultRandom(),
-  studentId: uuid('student_id').notNull(),
-  schoolId: uuid('school_id').notNull(),
+  /**
+   * Canonical-student owner. NULLABLE now that a report may instead belong to
+   * an unlinked parent child (see `parentChildId`). A DB CHECK constraint
+   * (`report_cards_owner_present`) guarantees at least one owner is set.
+   */
+  studentId: uuid('student_id'),
+  schoolId: uuid('school_id'),
+  /**
+   * Parent-owned owner: set when the report was uploaded by a parent for a
+   * child not yet linked to a canonical student (`parent_child.student_id IS
+   * NULL`). Mutually exclusive with `studentId` in practice — a future
+   * school-admin merge promotes the row IN PLACE by setting `studentId`/
+   * `schoolId`/`section` and clearing `parentChildId`, keeping the same `id`.
+   */
+  parentChildId: uuid('parent_child_id'),
   academicYear: text('academic_year').notNull(),
   className: text('class_name').notNull(),
   section: text('section'),
