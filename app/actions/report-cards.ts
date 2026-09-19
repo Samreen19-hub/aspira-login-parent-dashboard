@@ -58,7 +58,6 @@ export type EnrollmentOption = {
   academicYear: string
   className: string
   section: string | null
-  schoolId: string
 }
 
 export type ReportCard = {
@@ -110,9 +109,12 @@ async function resolveParentStudentId(
 
 /**
  * Verify the signed-in parent may manage a specific report card (by id) and
- * return the row. Authorization is by OWNERSHIP of the underlying student, not
- * by the supplied reportId — a parent can only touch a report whose `student_id`
- * is linked to one of THEIR children. Returns null otherwise.
+ * return the row. Authorization is by OWNERSHIP, never by the supplied reportId:
+ *
+ *   parent-owned : report.parent_child_id belongs to one of THIS parent's rows
+ *   linked       : report.student_id is linked to one of THIS parent's children
+ *
+ * Returns null otherwise.
  */
 async function resolveManageableReport(parentUserId: string, reportId: string) {
   if (!isUuid(reportId)) return null
@@ -125,20 +127,38 @@ async function resolveManageableReport(parentUserId: string, reportId: string) {
     .limit(1)
   if (!report) return null
 
-  // The report's student must be linked to one of this parent's children.
-  const [link] = await db
-    .select({ id: parentChild.id })
-    .from(parentChild)
-    .where(
-      and(
-        eq(parentChild.parentUserId, parentUserId),
-        eq(parentChild.studentId, report.studentId),
-      ),
-    )
-    .limit(1)
-  if (!link) return null
+  // Parent-owned report: the parent_child row must belong to this parent.
+  if (report.parentChildId) {
+    const [owned] = await db
+      .select({ id: parentChild.id })
+      .from(parentChild)
+      .where(
+        and(
+          eq(parentChild.id, report.parentChildId),
+          eq(parentChild.parentUserId, parentUserId),
+        ),
+      )
+      .limit(1)
+    return owned ? report : null
+  }
 
-  return report
+  // Linked report: the report's student must be linked to one of this parent's
+  // children.
+  if (report.studentId) {
+    const [link] = await db
+      .select({ id: parentChild.id })
+      .from(parentChild)
+      .where(
+        and(
+          eq(parentChild.parentUserId, parentUserId),
+          eq(parentChild.studentId, report.studentId),
+        ),
+      )
+      .limit(1)
+    return link ? report : null
+  }
+
+  return null
 }
 
 /* -------------------------------------------------------------------------- */
@@ -178,7 +198,6 @@ export async function getReportCardContext(
       academicYear: r.academicYear as string,
       className: r.className as string,
       section: r.section ?? null,
-      schoolId: r.schoolId,
     }))
 
   return { childId, childName: resolved.childName, linked: true, options }
@@ -198,36 +217,58 @@ export async function listReportCards(
   await ensureReportCardsTable()
 
   const resolved = await resolveParentStudentId(meId, childId)
-  if (!resolved?.studentId) return []
-  if (!filter.academicYear || !filter.className) return []
+  if (!resolved) return []
 
-  // Confirm the (year, class) corresponds to a real enrollment of THIS student,
-  // and derive the authoritative school_id from that enrollment.
-  const [enr] = await db
-    .select({ schoolId: enrollments.schoolId })
-    .from(enrollments)
-    .where(
-      and(
-        eq(enrollments.studentId, resolved.studentId),
-        eq(enrollments.academicYear, filter.academicYear),
-        eq(enrollments.className, filter.className),
-      ),
-    )
-    .limit(1)
-  if (!enr) return []
+  let rows: (typeof reportCards.$inferSelect)[]
 
-  const rows = await db
-    .select()
-    .from(reportCards)
-    .where(
-      and(
-        eq(reportCards.studentId, resolved.studentId),
-        eq(reportCards.schoolId, enr.schoolId),
-        eq(reportCards.academicYear, filter.academicYear),
-        eq(reportCards.className, filter.className),
-      ),
-    )
-    .orderBy(desc(reportCards.createdAt))
+  if (resolved.studentId) {
+    // -- Linked student: existing enrollment-scoped behavior (unchanged). ----
+    if (!filter.academicYear || !filter.className) return []
+
+    // Confirm the (year, class) corresponds to a real enrollment of THIS
+    // student, and derive the authoritative school_id from that enrollment.
+    const [enr] = await db
+      .select({ schoolId: enrollments.schoolId })
+      .from(enrollments)
+      .where(
+        and(
+          eq(enrollments.studentId, resolved.studentId),
+          eq(enrollments.academicYear, filter.academicYear),
+          eq(enrollments.className, filter.className),
+        ),
+      )
+      .limit(1)
+    if (!enr) return []
+
+    rows = await db
+      .select()
+      .from(reportCards)
+      .where(
+        and(
+          eq(reportCards.studentId, resolved.studentId),
+          eq(reportCards.schoolId, enr.schoolId),
+          eq(reportCards.academicYear, filter.academicYear),
+          eq(reportCards.className, filter.className),
+        ),
+      )
+      .orderBy(desc(reportCards.createdAt))
+  } else {
+    // -- Unlinked parent-owned child: reports keyed by parent_child_id. The
+    // childId is verified to belong to this parent above, so it is the trusted
+    // parent_child_id. Year/class filters are optional (empty = all), so the
+    // client can populate its own filter dropdowns from the returned rows.
+    const conds = [eq(reportCards.parentChildId, childId)]
+    if (filter.academicYear) {
+      conds.push(eq(reportCards.academicYear, filter.academicYear))
+    }
+    if (filter.className) conds.push(eq(reportCards.className, filter.className))
+
+    rows = await db
+      .select()
+      .from(reportCards)
+      .where(and(...conds))
+      .orderBy(desc(reportCards.createdAt))
+  }
 
   return rows.map((r) => ({
     id: r.id,
@@ -280,6 +321,7 @@ export async function addReportCard(formData: FormData): Promise<void> {
   const childId = String(formData.get('childId') ?? '')
   const academicYear = String(formData.get('academicYear') ?? '').trim()
   const className = String(formData.get('className') ?? '').trim()
+  const sectionInput = String(formData.get('section') ?? '').trim()
   const title = String(formData.get('title') ?? '').trim()
   const file = formData.get('file') as File | null
 
@@ -292,11 +334,40 @@ export async function addReportCard(formData: FormData): Promise<void> {
 
   const resolved = await resolveParentStudentId(meId, childId)
   if (!resolved) throw new Error('Not authorized for this child.')
+
   if (!resolved.studentId) {
-    throw new Error('This child is not linked to a student yet.')
+    // -- Unlinked parent-owned child: preserve the report now, before the
+    // school links the child. `childId` is verified above to belong to this
+    // parent, so it is the trusted parent_child_id. No enrollment/student/
+    // school is required or invented; the parent supplies year/class/section.
+    const pathname = `report-cards/parent-child/${childId}/${crypto.randomUUID()}-${sanitizeName(
+      file.name,
+    )}`
+    const blob = await put(pathname, file, {
+      access: 'private',
+      contentType: file.type,
+    })
+
+    await db.insert(reportCards).values({
+      parentChildId: childId,
+      academicYear,
+      className,
+      section: sectionInput || null,
+      title,
+      fileUrl: blob.url,
+      filePathname: blob.pathname,
+      fileType: file.type,
+      originalFilename: file.name,
+      createdBy: meId,
+      updatedBy: meId,
+    })
+
+    revalidateChild(childId)
+    return
   }
 
-  // Derive the authoritative school_id + section from the student's enrollment.
+  // -- Linked student: derive the authoritative school_id + section from the
+  // student's enrollment (existing behavior, unchanged).
   const [enr] = await db
     .select({ schoolId: enrollments.schoolId, section: enrollments.section })
     .from(enrollments)
@@ -356,10 +427,26 @@ export async function updateReportCard(formData: FormData): Promise<void> {
   const patch: Record<string, unknown> = { updatedAt: new Date(), updatedBy: meId }
   if (title) patch.title = title
 
+  // Parent-owned reports have no enrollment to derive from, so the parent may
+  // also edit the organizing year/class/section directly. Linked reports keep
+  // their enrollment-derived values (title + file replacement only).
+  if (report.parentChildId) {
+    const academicYear = String(formData.get('academicYear') ?? '').trim()
+    const className = String(formData.get('className') ?? '').trim()
+    if (academicYear) patch.academicYear = academicYear
+    if (className) patch.className = className
+    if (formData.has('section')) {
+      patch.section = String(formData.get('section') ?? '').trim() || null
+    }
+  }
+
   let oldPathnameToDelete: string | null = null
   if (file && file.size > 0) {
     validateFile(file)
-    const pathname = `report-cards/${report.studentId}/${crypto.randomUUID()}-${sanitizeName(
+    const blobDir = report.parentChildId
+      ? `report-cards/parent-child/${report.parentChildId}`
+      : `report-cards/${report.studentId}`
+    const pathname = `${blobDir}/${crypto.randomUUID()}-${sanitizeName(
       file.name,
     )}`
     const blob = await put(pathname, file, {

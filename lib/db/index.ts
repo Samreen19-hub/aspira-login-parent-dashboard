@@ -762,14 +762,20 @@ export function ensureReportCardsTable(): Promise<void> {
   if (!reportCardsReady) {
     reportCardsReady = (async () => {
       // The canonical students/schools tables must exist first — FKs below
-      // reference them.
+      // reference them. `parent_child` must exist too, because a report may now
+      // belong to an unlinked parent child (parent_child_id FK below).
       await ensureSchoolFoundationTables()
+      await ensureParentChildTable()
 
+      // Base table (fresh installs). student_id/school_id are NULLABLE so a
+      // report can instead belong to an unlinked parent child via
+      // parent_child_id. The owner CHECK guarantees at least one owner exists.
       await pool.query(`
         CREATE TABLE IF NOT EXISTS public.report_cards (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-          student_id uuid NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
-          school_id uuid NOT NULL REFERENCES public.schools(id) ON DELETE CASCADE,
+          student_id uuid REFERENCES public.students(id) ON DELETE CASCADE,
+          school_id uuid REFERENCES public.schools(id) ON DELETE CASCADE,
+          parent_child_id uuid REFERENCES public.parent_child(id) ON DELETE CASCADE,
           academic_year text NOT NULL,
           class_name text NOT NULL,
           section text,
@@ -781,9 +787,37 @@ export function ensureReportCardsTable(): Promise<void> {
           created_by uuid NOT NULL,
           updated_by uuid,
           created_at timestamptz NOT NULL DEFAULT now(),
-          updated_at timestamptz NOT NULL DEFAULT now()
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          CONSTRAINT report_cards_owner_present
+            CHECK (student_id IS NOT NULL OR parent_child_id IS NOT NULL)
         )
       `)
+
+      // --- Backward-compatible migration for already-provisioned tables ------
+      // Add the parent-owned column if the table predates this feature.
+      await pool.query(`
+        ALTER TABLE public.report_cards
+        ADD COLUMN IF NOT EXISTS parent_child_id uuid
+        REFERENCES public.parent_child(id) ON DELETE CASCADE
+      `)
+      // Relax the original NOT NULL constraints so a parent-owned report can
+      // leave student_id/school_id NULL. Existing linked rows are untouched.
+      await pool.query(`ALTER TABLE public.report_cards ALTER COLUMN student_id DROP NOT NULL`)
+      await pool.query(`ALTER TABLE public.report_cards ALTER COLUMN school_id DROP NOT NULL`)
+      // Enforce "at least one owner" on existing tables too (idempotent).
+      await pool.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'report_cards_owner_present'
+          ) THEN
+            ALTER TABLE public.report_cards
+            ADD CONSTRAINT report_cards_owner_present
+            CHECK (student_id IS NOT NULL OR parent_child_id IS NOT NULL);
+          END IF;
+        END $$;
+      `)
+
       // Covers the parent/school "report cards for this student, filtered by
       // school + academic year + class" listing — the primary hot path.
       await pool.query(`
@@ -794,6 +828,11 @@ export function ensureReportCardsTable(): Promise<void> {
       await pool.query(`
         CREATE INDEX IF NOT EXISTS report_cards_school
         ON public.report_cards (school_id)
+      `)
+      // Covers the parent-owned "report cards for this unlinked child" listing.
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS report_cards_parent_child
+        ON public.report_cards (parent_child_id, academic_year, class_name)
       `)
     })().catch((error) => {
       // Reset so a transient failure can be retried on the next call.

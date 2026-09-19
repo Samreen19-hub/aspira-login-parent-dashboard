@@ -6,7 +6,7 @@ import {
   Download,
   Eye,
   FileText,
-  Link2Off,
+  ShieldCheck,
   Loader2,
   Pencil,
   Plus,
@@ -85,23 +85,9 @@ export function ReportCardView({ context }: { context: ReportCardContext }) {
 
   const cards = data ?? []
 
-  /* ---- Unlinked child: no canonical student yet -------------------------- */
+  /* ---- Unlinked child: parent can preserve report cards now --------------- */
   if (!linked) {
-    return (
-      <Card className="items-center gap-3 p-12 text-center">
-        <span className="grid size-14 place-items-center rounded-2xl bg-brand-muted text-brand">
-          <Link2Off className="size-7" />
-        </span>
-        <h2 className="font-display text-lg font-semibold text-foreground">
-          Not linked to a student yet
-        </h2>
-        <p className="max-w-sm text-sm text-muted-foreground text-pretty">
-          This child isn&apos;t connected to a school student record yet, so there are no
-          report cards to show. Once the school links this child to a student and enrollment,
-          their report cards will appear here.
-        </p>
-      </Card>
-    )
+    return <ParentOwnedReportCards childId={childId} />
   }
 
   /* ---- Linked but no enrollments: no year/class options ------------------ */
