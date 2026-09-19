@@ -6,7 +6,6 @@ import {
   Download,
   Eye,
   FileText,
-  ShieldCheck,
   Loader2,
   Pencil,
   Plus,
@@ -497,6 +496,404 @@ function ReportCardFormDialog({
             <input
               ref={fileRef}
               id="report-file"
+              name="file"
+              type="file"
+              accept={ACCEPT}
+              className="sr-only"
+              onChange={(event) => setFileName(event.target.files?.[0]?.name ?? null)}
+            />
+            {mode === "edit" ? (
+              <p className="text-xs text-muted-foreground">
+                Leave empty to keep the current file.
+              </p>
+            ) : null}
+          </div>
+
+          {error ? (
+            <p className="text-sm font-medium text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" className="rounded-xl" />}>
+              Cancel
+            </DialogClose>
+            <Button type="submit" className="rounded-xl" disabled={saving}>
+              {saving ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Saving…
+                </>
+              ) : mode === "add" ? (
+                "Upload"
+              ) : (
+                "Save changes"
+              )}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Parent-owned report cards (unlinked child)                                 */
+/* -------------------------------------------------------------------------- */
+
+function ParentOwnedReportCards({ childId }: { childId: string }) {
+  const { data, isLoading, mutate } = useSWR(
+    ["parent-owned-report-cards", childId],
+    () => listReportCards(childId, { academicYear: "", className: "" }),
+    { revalidateOnFocus: false },
+  )
+  const cards = data ?? []
+  const [addOpen, setAddOpen] = useState(false)
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="font-display text-lg font-semibold text-foreground">
+            Your report cards
+          </h2>
+          <p className="mt-0.5 max-w-xl text-sm text-muted-foreground text-pretty">
+            This child isn&apos;t linked to a school record yet. You can still add and keep report
+            cards here — they&apos;ll be preserved and stay available once the school links this
+            child.
+          </p>
+        </div>
+        <Button className="rounded-xl" onClick={() => setAddOpen(true)}>
+          <Plus className="size-4" />
+          Add Report Card
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <Card className="items-center gap-2 p-12 text-center">
+          <Loader2 className="size-6 animate-spin text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">Loading report cards…</p>
+        </Card>
+      ) : cards.length === 0 ? (
+        <Card className="items-center gap-3 p-12 text-center">
+          <span className="grid size-14 place-items-center rounded-2xl bg-brand-muted text-brand">
+            <FileText className="size-7" />
+          </span>
+          <h2 className="font-display text-lg font-semibold text-foreground">
+            No report cards yet
+          </h2>
+          <p className="max-w-sm text-sm text-muted-foreground text-pretty">
+            Add your first report card to keep it safe. You choose the academic year, class and an
+            optional section.
+          </p>
+          <Button className="mt-1 rounded-xl" onClick={() => setAddOpen(true)}>
+            <Plus className="size-4" />
+            Add Report Card
+          </Button>
+        </Card>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {cards.map((card) => (
+            <ParentOwnedRow
+              key={card.id}
+              card={card}
+              childId={childId}
+              onChanged={() => mutate()}
+            />
+          ))}
+        </div>
+      )}
+
+      <ParentOwnedFormDialog
+        mode="add"
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        childId={childId}
+        onSaved={() => {
+          setAddOpen(false)
+          mutate()
+        }}
+      />
+    </div>
+  )
+}
+
+function ParentOwnedRow({
+  card,
+  childId,
+  onChanged,
+}: {
+  card: ReportCard
+  childId: string
+  onChanged: () => void
+}) {
+  const [viewOpen, setViewOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  async function onDelete() {
+    if (deleting) return
+    setDeleting(true)
+    try {
+      await deleteReportCard(card.id, childId)
+      onChanged()
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <Card className="gap-0 p-0">
+      <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-brand-muted text-brand">
+            <FileText className="size-5" />
+          </span>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-display text-base font-bold text-foreground">{card.title}</h3>
+              <Badge variant="outline">{isImage(card.fileType) ? "Image" : "PDF"}</Badge>
+            </div>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Academic Year {card.academicYear}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <Badge variant="outline">{card.className}</Badge>
+              {card.section ? <Badge variant="outline">Section {card.section}</Badge> : null}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button variant="outline" className="rounded-xl" onClick={() => setViewOpen(true)}>
+            <Eye className="size-4" />
+            View
+          </Button>
+          <Button className="rounded-xl" render={<a href={fileUrl(card.id, true)} download />}>
+            <Download className="size-4" />
+            Download
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            className="rounded-xl"
+            aria-label="Edit report card"
+            onClick={() => setEditOpen(true)}
+          >
+            <Pencil className="size-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            className="rounded-xl text-destructive hover:text-destructive"
+            aria-label="Delete report card"
+            onClick={onDelete}
+            disabled={deleting}
+          >
+            {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+          </Button>
+        </div>
+      </div>
+
+      {/* View dialog */}
+      <Dialog open={viewOpen} onOpenChange={setViewOpen}>
+        <DialogContent className="max-h-[90vh] gap-0 overflow-hidden p-0 sm:max-w-3xl">
+          <DialogHeader className="gap-1 border-b border-border p-5">
+            <DialogTitle className="font-display text-lg font-bold">{card.title}</DialogTitle>
+            <DialogDescription>
+              Academic Year {card.academicYear} · {card.className}
+              {card.section ? ` · Section ${card.section}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="min-h-[60vh] bg-muted/30">
+            {isImage(card.fileType) ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={fileUrl(card.id) || "/placeholder.svg"}
+                alt={`${card.title} report card`}
+                className="mx-auto max-h-[70vh] w-auto object-contain p-4"
+              />
+            ) : (
+              <iframe
+                src={fileUrl(card.id)}
+                title={`${card.title} report card`}
+                className="h-[70vh] w-full"
+              />
+            )}
+          </div>
+
+          <DialogFooter className="border-t border-border">
+            <DialogClose render={<Button variant="outline" className="rounded-xl" />}>
+              Close
+            </DialogClose>
+            <Button className="rounded-xl" render={<a href={fileUrl(card.id, true)} download />}>
+              <Download className="size-4" />
+              Download
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit dialog */}
+      <ParentOwnedFormDialog
+        mode="edit"
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        childId={childId}
+        report={card}
+        onSaved={() => {
+          setEditOpen(false)
+          onChanged()
+        }}
+      />
+    </Card>
+  )
+}
+
+function ParentOwnedFormDialog({
+  mode,
+  open,
+  onOpenChange,
+  childId,
+  report,
+  onSaved,
+}: {
+  mode: "add" | "edit"
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  childId: string
+  report?: ReportCard
+  onSaved: () => void
+}) {
+  const [title, setTitle] = useState(report?.title ?? "")
+  const [academicYear, setAcademicYear] = useState(report?.academicYear ?? "")
+  const [className, setClassName] = useState(report?.className ?? "")
+  const [section, setSection] = useState(report?.section ?? "")
+  const [fileName, setFileName] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (saving) return
+    setError(null)
+
+    const form = event.currentTarget
+    const formData = new FormData(form)
+    formData.set("childId", childId)
+
+    const file = fileRef.current?.files?.[0]
+    if (mode === "add" && !file) {
+      setError("Please choose a PNG, JPG or PDF file.")
+      return
+    }
+
+    setSaving(true)
+    try {
+      if (mode === "add") {
+        await addReportCard(formData)
+      } else if (report) {
+        formData.set("reportId", report.id)
+        await updateReportCard(formData)
+      }
+      onSaved()
+      if (mode === "add") {
+        setTitle("")
+        setAcademicYear("")
+        setClassName("")
+        setSection("")
+      }
+      setFileName(null)
+      if (fileRef.current) fileRef.current.value = ""
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="font-display">
+            {mode === "add" ? "Add Report Card" : "Edit Report Card"}
+          </DialogTitle>
+          <DialogDescription>
+            Keep this report card safe. You choose how it&apos;s organized.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={onSubmit} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="parent-report-title">Title</Label>
+            <Input
+              id="parent-report-title"
+              name="title"
+              placeholder="e.g. Term 1 Report"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              required
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="parent-report-year">Academic Year</Label>
+            <Input
+              id="parent-report-year"
+              name="academicYear"
+              placeholder="e.g. 2024-2025"
+              value={academicYear}
+              onChange={(event) => setAcademicYear(event.target.value)}
+              required
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="parent-report-class">Class</Label>
+            <Input
+              id="parent-report-class"
+              name="className"
+              placeholder="e.g. Grade 5"
+              value={className}
+              onChange={(event) => setClassName(event.target.value)}
+              required
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="parent-report-section">Section (optional)</Label>
+            <Input
+              id="parent-report-section"
+              name="section"
+              placeholder="e.g. A"
+              value={section}
+              onChange={(event) => setSection(event.target.value)}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="parent-report-file">
+              {mode === "add" ? "Report file (PNG, JPG or PDF)" : "Replace file (optional)"}
+            </Label>
+            <label
+              htmlFor="parent-report-file"
+              className="flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-border px-3 py-3 text-sm text-muted-foreground transition-colors hover:border-brand hover:text-foreground"
+            >
+              <Upload className="size-4" />
+              <span className="truncate">
+                {fileName ??
+                  (mode === "edit" && report?.originalFilename
+                    ? `Current: ${report.originalFilename}`
+                    : "Choose a file")}
+              </span>
+            </label>
+            <input
+              ref={fileRef}
+              id="parent-report-file"
               name="file"
               type="file"
               accept={ACCEPT}
