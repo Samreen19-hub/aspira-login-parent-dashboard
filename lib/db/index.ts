@@ -596,3 +596,143 @@ export function ensureParentChildTable(): Promise<void> {
   }
   return parentChildReady
 }
+
+/**
+ * Lazily provisions the SHARED school foundation tables (schema: public) using
+ * the shared pool, following the exact same idempotent (`IF NOT EXISTS`),
+ * memoized, schema-qualified pattern as the helpers above. This is a purely
+ * ADDITIVE foundation — it creates new tables only and never resets, replaces,
+ * or seeds any data. It establishes the single canonical relationship
+ *
+ *   school_admin (user) -> school -> enrollment -> student <- parent_child
+ *
+ * so a parent, a school admin, and (eventually) a student all resolve to the
+ * SAME canonical records rather than per-role copies.
+ *
+ * Tables created here (all in `public`):
+ *  - `students`      Canonical student entity with a stable UUID. `user_id` is
+ *                    reserved for a FUTURE real student account link to
+ *                    `neon_auth.user.id` (NOT implemented here) and stays
+ *                    nullable, mirroring the existing `parent_child.child_user_id`
+ *                    convention. No foreign key to `neon_auth`.
+ *  - `schools`       Minimal school record (id, name, timestamps).
+ *  - `school_admins` Authoritative `school_id <-> user_id` membership. This — NOT
+ *                    the frontend `school` persona — is the source of truth for
+ *                    which schools a user administers. `user_id` is a Better Auth
+ *                    `neon_auth.user.id` but carries no FK to `neon_auth`,
+ *                    matching the existing Aspira convention.
+ *  - `enrollments`   `student_id <-> school_id` relationship plus the student's
+ *                    class/section/academic year, so a student's school is a
+ *                    persistent relationship rather than the free-text
+ *                    `parent_child.school`/`class_name` labels (which are
+ *                    preserved untouched for backward compatibility).
+ *
+ * Foreign keys are used AMONG these co-provisioned public tables (creation order
+ * is controlled here) to keep the relationships referentially sound. The link
+ * from an existing `parent_child` row to a canonical student is added as a
+ * nullable `student_id` column on `public.parent_child` WITHOUT a foreign key —
+ * matching the decoupled, no-FK style of the existing `child_user_id` column and
+ * avoiding cross-helper provisioning-order coupling. It is nullable so every
+ * existing parent_child row is preserved exactly and is simply not-yet-linked.
+ */
+let schoolFoundationReady: Promise<void> | null = null
+export function ensureSchoolFoundationTables(): Promise<void> {
+  if (!schoolFoundationReady) {
+    schoolFoundationReady = (async () => {
+      // Canonical student entity. `user_id` is the future (not-yet-implemented)
+      // link to a real student's Better Auth account; nullable today.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.students (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id uuid,
+          name text,
+          dob text,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+
+      // Minimal school record.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.schools (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          name text NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+
+      // Authoritative school-admin membership: which user administers which
+      // school. FK to schools (co-provisioned above); no FK to neon_auth.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.school_admins (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          school_id uuid NOT NULL REFERENCES public.schools(id) ON DELETE CASCADE,
+          user_id uuid NOT NULL,
+          role text NOT NULL DEFAULT 'admin',
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      // One membership row per (school, user) -> granting admin is idempotent.
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS school_admins_unique
+        ON public.school_admins (school_id, user_id)
+      `)
+      // Covers "which schools does this user administer" authorization lookups.
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS school_admins_user
+        ON public.school_admins (user_id)
+      `)
+
+      // Student <-> school enrollment, plus class/section/academic year. FKs to
+      // the co-provisioned students and schools tables.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.enrollments (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          student_id uuid NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+          school_id uuid NOT NULL REFERENCES public.schools(id) ON DELETE CASCADE,
+          class_name text,
+          section text,
+          academic_year text,
+          status text NOT NULL DEFAULT 'active',
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      // At most one enrollment per student per school per academic year.
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS enrollments_student_school_year
+        ON public.enrollments (student_id, school_id, academic_year)
+      `)
+      // Covers "students enrolled in this school" (school-admin authorization)
+      // and "this student's enrollments" (parent/student resolution).
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS enrollments_school
+        ON public.enrollments (school_id)
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS enrollments_student
+        ON public.enrollments (student_id)
+      `)
+
+      // Link an existing parent_child roster row to a canonical student. The
+      // parent_child table must exist first — it is owned by its own helper.
+      // Additive, nullable, no FK (matches the existing child_user_id style):
+      // every existing parent_child row is preserved and simply not-yet-linked.
+      await ensureParentChildTable()
+      await pool.query(`
+        ALTER TABLE public.parent_child ADD COLUMN IF NOT EXISTS student_id uuid
+      `)
+      // Covers "which parent_child rows point at this canonical student".
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS parent_child_student
+        ON public.parent_child (student_id)
+      `)
+    })().catch((error) => {
+      // Reset so a transient failure can be retried on the next call.
+      schoolFoundationReady = null
+      throw error
+    })
+  }
+  return schoolFoundationReady
+}

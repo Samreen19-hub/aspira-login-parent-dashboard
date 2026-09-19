@@ -360,6 +360,14 @@ export const parentChild = pgTable('parent_child', {
   id: uuid('id').primaryKey().defaultRandom(),
   parentUserId: uuid('parent_user_id').notNull(),
   childUserId: uuid('child_user_id'),
+  /**
+   * Optional link from this parent roster row to the SHARED canonical student
+   * (`public.students.id`). Nullable and without a foreign key — matching the
+   * decoupled `child_user_id` style — so every existing parent_child row is
+   * preserved and simply not-yet-linked until associated. Added lazily by
+   * `ensureSchoolFoundationTables` (see `lib/db/index.ts`).
+   */
+  studentId: uuid('student_id'),
   status: text('status').notNull().default('unlinked'),
   name: text('name').notNull(),
   className: text('class_name'),
