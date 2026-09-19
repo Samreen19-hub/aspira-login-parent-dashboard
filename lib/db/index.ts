@@ -736,3 +736,70 @@ export function ensureSchoolFoundationTables(): Promise<void> {
   }
   return schoolFoundationReady
 }
+
+/**
+ * Lazily provisions the `public.report_cards` table (and its supporting
+ * indexes) using the shared pool, following the exact same idempotent
+ * (`IF NOT EXISTS`), memoized, schema-qualified pattern as the helpers above.
+ *
+ * This is THE single, shared report-card store — there is deliberately no
+ * per-role copy (no parent_report_cards / student_report_cards /
+ * school_report_cards). Each row binds a canonical `student_id` + `school_id`
+ * to an academic year + class (+ section), so the same row resolves for a
+ * parent (via `parent_child.student_id`), a school admin (via
+ * `school_admins -> enrollments -> student`), and eventually a student.
+ *
+ * The uploaded file lives in Vercel Blob; only its metadata is stored here
+ * (`file_url`, `file_pathname`, `file_type`, `original_filename`) — the file
+ * bytes are never put in the database. Foreign keys reference the
+ * co-provisioned foundation tables (`students`, `schools`), so this depends on
+ * `ensureSchoolFoundationTables` having created them first. `created_by`/
+ * `updated_by` are authenticated Better Auth user ids and carry no FK to
+ * `neon_auth`, matching the existing Aspira convention.
+ */
+let reportCardsReady: Promise<void> | null = null
+export function ensureReportCardsTable(): Promise<void> {
+  if (!reportCardsReady) {
+    reportCardsReady = (async () => {
+      // The canonical students/schools tables must exist first — FKs below
+      // reference them.
+      await ensureSchoolFoundationTables()
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS public.report_cards (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          student_id uuid NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+          school_id uuid NOT NULL REFERENCES public.schools(id) ON DELETE CASCADE,
+          academic_year text NOT NULL,
+          class_name text NOT NULL,
+          section text,
+          title text NOT NULL,
+          file_url text NOT NULL,
+          file_pathname text,
+          file_type text NOT NULL,
+          original_filename text,
+          created_by uuid NOT NULL,
+          updated_by uuid,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      // Covers the parent/school "report cards for this student, filtered by
+      // school + academic year + class" listing — the primary hot path.
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS report_cards_student_scope
+        ON public.report_cards (student_id, school_id, academic_year, class_name)
+      `)
+      // Covers school-admin "all report cards for this school" lookups.
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS report_cards_school
+        ON public.report_cards (school_id)
+      `)
+    })().catch((error) => {
+      // Reset so a transient failure can be retried on the next call.
+      reportCardsReady = null
+      throw error
+    })
+  }
+  return reportCardsReady
+}

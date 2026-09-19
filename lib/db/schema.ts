@@ -389,3 +389,101 @@ export const parentChildSeeds = pgTable('parent_child_seeds', {
   parentUserId: uuid('parent_user_id').primaryKey(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })
+
+/**
+ * Canonical student entity (schema: public). Part of the SHARED school
+ * foundation provisioned by `ensureSchoolFoundationTables` (see
+ * `lib/db/index.ts`). `user_id` is the future (not-yet-implemented) link to a
+ * real student's Better Auth account and stays nullable, mirroring the
+ * decoupled `parent_child.child_user_id` convention. No foreign key to
+ * `neon_auth`.
+ */
+export const students = pgTable('students', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id'),
+  name: text('name'),
+  dob: text('dob'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * Minimal school record (schema: public). Part of the SHARED school foundation
+ * provisioned by `ensureSchoolFoundationTables`.
+ */
+export const schools = pgTable('schools', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * Authoritative school-admin membership (schema: public): which user
+ * administers which school. This — NOT the frontend `school` persona — is the
+ * source of truth for school-admin authorization. `user_id` is a Better Auth
+ * `neon_auth.user.id` but carries no FK to `neon_auth`, matching the existing
+ * Aspira convention. Provisioned by `ensureSchoolFoundationTables`.
+ */
+export const schoolAdmins = pgTable('school_admins', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  schoolId: uuid('school_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  role: text('role').notNull().default('admin'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * Student <-> school enrollment plus the student's class/section/academic year
+ * (schema: public). A student's school is a persistent relationship here rather
+ * than the free-text `parent_child.school`/`class_name` labels (which are
+ * preserved untouched). The canonical source for the parent Report Card page's
+ * Year and Class dropdowns. Provisioned by `ensureSchoolFoundationTables`.
+ */
+export const enrollments = pgTable('enrollments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  studentId: uuid('student_id').notNull(),
+  schoolId: uuid('school_id').notNull(),
+  className: text('class_name'),
+  section: text('section'),
+  academicYear: text('academic_year'),
+  status: text('status').notNull().default('active'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * Report cards (schema: public). THE single, shared source of truth for a
+ * report card — there is intentionally no parent/student/school-specific copy.
+ * Each row is bound to the canonical `student_id` + `school_id` and the
+ * academic year + class (+ section where the enrollment has one), so the SAME
+ * row is resolvable by a parent (via `parent_child.student_id`), by a school
+ * admin (via `school_admins -> enrollments -> student`), and eventually by the
+ * student.
+ *
+ * The uploaded file itself lives in Vercel Blob (private store); only its
+ * metadata lives here: `file_url` (the blob URL — not publicly reachable for a
+ * private store, served through an authenticated route), `file_pathname` (the
+ * blob pathname, used to serve and to delete/clean up the blob), `file_type`
+ * (MIME) and `original_filename`. `created_by`/`updated_by` are the
+ * authenticated Better Auth user ids (parent OR school admin), never trusted
+ * from the browser. Provisioned lazily by `ensureReportCardsTable`
+ * (see `lib/db/index.ts`).
+ */
+export const reportCards = pgTable('report_cards', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  studentId: uuid('student_id').notNull(),
+  schoolId: uuid('school_id').notNull(),
+  academicYear: text('academic_year').notNull(),
+  className: text('class_name').notNull(),
+  section: text('section'),
+  title: text('title').notNull(),
+  fileUrl: text('file_url').notNull(),
+  filePathname: text('file_pathname'),
+  fileType: text('file_type').notNull(),
+  originalFilename: text('original_filename'),
+  createdBy: uuid('created_by').notNull(),
+  updatedBy: uuid('updated_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
